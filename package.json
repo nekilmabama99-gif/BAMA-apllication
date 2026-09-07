@@ -1,0 +1,17 @@
+{
+  "name": "gestion-etablissement-android",
+  "version": "1.0.0",
+  "description": "Logiciel de gestion d'établissement scolaire — version Android",
+  "private": true,
+  "author": "BAMA Nékilma",
+  "scripts": {
+    "sync": "npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.0",
+    "@capacitor/core": "^6.1.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.0"
+  }
+}

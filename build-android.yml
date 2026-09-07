@@ -1,0 +1,78 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # Localise automatiquement le dossier du projet Capacitor dans le dépôt (celui qui
+      # contient capacitor.config.json), qu'il soit à la racine ou dans un sous-dossier
+      # (ex. "capacitor-app/"). Évite l'erreur "Could not find the web assets directory: ./www"
+      # qui survient quand les commandes s'exécutent au mauvais endroit.
+      - name: Localiser le projet Capacitor
+        id: locate
+        run: |
+          DIR=$(dirname "$(find . -maxdepth 4 -name capacitor.config.json -not -path '*/node_modules/*' | head -n1)")
+          if [ -z "$DIR" ] || [ "$DIR" = "." ]; then DIR="."; fi
+          echo "Projet Capacitor trouvé dans : $DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+
+      - run: npm install
+        working-directory: ${{ steps.locate.outputs.dir }}
+
+      # Crée le projet Android natif à partir de la config Capacitor
+      # (ignoré si le dossier android/ existe déjà dans le dépôt)
+      - run: npx cap add android || true
+        working-directory: ${{ steps.locate.outputs.dir }}
+      - run: npx cap sync android
+        working-directory: ${{ steps.locate.outputs.dir }}
+
+      # Signature release : la clé (.keystore) et ses mots de passe ne sont JAMAIS dans le dépôt,
+      # seulement dans les secrets GitHub du dépôt (Settings → Secrets and variables → Actions) :
+      # ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD.
+      # Sans ces secrets configurés, la compilation "release" échoue faute de signature — c'est
+      # volontaire (mieux vaut un échec explicite qu'un APK non signé silencieusement).
+      - name: Préparer la signature release
+        working-directory: ${{ steps.locate.outputs.dir }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 manquant — voir LISEZ-MOI-ANDROID.md pour le configurer."
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/release.keystore
+          cat > android/keystore.properties << PROPS
+          storeFile=release.keystore
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          PROPS
+          node scripts/configurer-signature-android.js
+
+      - name: Compiler l'APK signé (release)
+        working-directory: ${{ steps.locate.outputs.dir }}/android
+        run: chmod +x gradlew && ./gradlew assembleRelease
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gestion-etablissement-android
+          path: ${{ steps.locate.outputs.dir }}/android/app/build/outputs/apk/release/app-release.apk
