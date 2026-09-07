@@ -54,11 +54,16 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Le numéro de build GitHub Actions (toujours unique et croissant, jamais réutilisé même
+          # après suppression d'anciens runs) sert de versionCode Android — c'est ce qui permet à
+          # Android d'accepter une mise à jour par-dessus une version déjà installée.
+          ANDROID_VERSION_CODE: ${{ github.run_number }}
         run: |
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
             echo "::error::Secret ANDROID_KEYSTORE_BASE64 manquant — voir LISEZ-MOI-ANDROID.md pour le configurer."
             exit 1
           fi
+          ANDROID_VERSION_NAME=$(node -p "require('./package.json').version")
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/release.keystore
           cat > android/keystore.properties << PROPS
           storeFile=release.keystore
@@ -66,7 +71,7 @@ jobs:
           keyAlias=$ANDROID_KEY_ALIAS
           keyPassword=$ANDROID_KEY_PASSWORD
           PROPS
-          node scripts/configurer-signature-android.js
+          ANDROID_VERSION_NAME="$ANDROID_VERSION_NAME" node scripts/configurer-signature-android.js
 
       - name: Compiler l'APK signé (release)
         working-directory: ${{ steps.locate.outputs.dir }}/android
