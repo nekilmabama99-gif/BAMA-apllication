@@ -266,6 +266,9 @@
   .receipt-table{width:100%;border-collapse:collapse;margin-bottom:10px;}
   .receipt-table td, .receipt-table th{border:1px solid #ccc;padding:8px 10px;font-size:13px;text-align:left;}
   .receipt-table tr.highlight td{background:var(--gold-soft);font-weight:700;}
+  .fiche-paie-table{table-layout:fixed;}
+  .fiche-paie-table td.fiche-info-label{font-weight:700;background:#f4f2ec;white-space:nowrap;width:14%;}
+  .fiche-paie-table td.fiche-signature-cell{height:2.6em;}
   .moyenne-final{font-family:var(--serif);font-size:16px;font-weight:700;color:var(--navy);text-align:right;}
   .signature{margin-top:50px;text-align:right;font-size:12px;color:#555;border-top:1px solid #999;display:inline-block;float:right;padding-top:6px;}
 
@@ -495,6 +498,7 @@
     .topbar{padding:14px 18px;flex-direction:column;align-items:flex-start;gap:6px;}
   }
 </style>
+<style id="print-orientation-override"></style>
 </head>
 <body>
 
@@ -659,7 +663,8 @@ const DEFAULT_PARAMS = {
     permanenceLyceeMontant: 100000,
     permanenceCollegeHeures: 22,
     permanenceCollegeMontant: 100000,
-    tauxTaxe: 5
+    tauxTaxe: 5,
+    moisDebutFiches: '' // mois de départ (AAAA-MM) des fiches de paie annuelles à signer
   },
   directeurNom: '',
   directeurTelephone: '',
@@ -1917,6 +1922,83 @@ function calculSalaire(entry){
   return { brut, taxe, net };
 }
 
+/* ---------- Fiches de paie annuelles à signer (une fiche par personnel) ---------- */
+const NOMS_MOIS_FR = ['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+
+// À partir d'un mois de départ "AAAA-MM" et d'un nombre de mois, produit la liste des libellés
+// "Mois AAAA" successifs (en franchissant l'année civile si besoin, ex: Octobre 2025 -> Juillet 2026).
+function libellesMoisDepuis(moisDebut, n){
+  if(!moisDebut || !n || n<=0) return [];
+  const [an, mo] = moisDebut.split('-').map(Number);
+  if(!an || !mo) return [];
+  const labels = [];
+  for(let i=0;i<n;i++){
+    const total = (mo-1) + i;
+    const y = an + Math.floor(total/12);
+    const m = total % 12;
+    labels.push(`${NOMS_MOIS_FR[m]} ${y}`);
+  }
+  return labels;
+}
+
+// Fiche de paie annuelle d'un membre du personnel : une colonne "Information" (matricule, statut,
+// salaire brut, taxes, net à payer, signature) puis une colonne par mois de paie. Seules les
+// informations déjà connues et stables sur l'année (matricule, statut, salaire brut des postes
+// fixes ou des enseignants Permanents) sont pré-remplies ; taxes, net à payer et signature restent
+// vides, à renseigner et signer chaque mois par l'intéressé(e) avant de percevoir son salaire.
+function buildFichePaieAnnuelleHTML(personnelId){
+  const p = PERSONNEL.find(x=>x.id===personnelId);
+  if(!p) return '<p>Membre du personnel introuvable.</p>';
+  const n = Number(p.nbMoisPaie)||0;
+  const moisDebut = PARAMS.paie.moisDebutFiches;
+  if(!moisDebut || n<=0){
+    return `<div class="bulletin">${printHeader()}<h3>Fiche de paie annuelle</h3><p class="muted">Renseignez le mois de départ des fiches ci-dessus, ainsi que le nombre de mois de paie de ${esc(p.nom)} ${esc(p.prenom)} (onglet Personnel), avant de générer sa fiche.</p></div>`;
+  }
+  const libelles = libellesMoisDepuis(moisDebut, n);
+  let brutConnu = null;
+  if(p.fonction!=='Enseignant'){
+    brutConnu = Number(p.salaireFixe)||0;
+  } else if(p.typePersonnel==='Permanent'){
+    brutConnu = calculSalaire({type:'Permanence', niveau:p.niveauEnseignement, heures:p.heuresSemaine}).brut;
+  }
+  const statutLabel = p.fonction==='Enseignant' ? (p.typePersonnel||'—') : 'Permanent';
+  const infoRows = [
+    { label:'Matricule', cell: ()=> esc(p.matricule)||'—' },
+    { label:'Statut', cell: ()=> esc(statutLabel) },
+    { label:'Salaire brut', cell: ()=> brutConnu!==null ? fmt(brutConnu) : '' },
+    { label:'Taxes', cell: ()=> '' },
+    { label:'Net à payer', cell: ()=> '' },
+    { label:'Signature', cls:' class="fiche-signature-cell"', cell: ()=> '' }
+  ];
+  const theadCols = libelles.map(l=>`<th>${esc(l)}</th>`).join('');
+  const bodyRows = infoRows.map(r=>`
+    <tr><td class="fiche-info-label">${esc(r.label)}</td>${libelles.map(()=>`<td${r.cls||''}>${r.cell()}</td>`).join('')}</tr>
+  `).join('');
+  return `
+    <div class="bulletin fiche-paie">
+      ${printHeader()}
+      ${buildTopline(['Fiche de paie annuelle'], ['Année scolaire : '+anneeLibelle(anneeAffichageCourante())])}
+      <h3>Fiche de suivi mensuel de la rémunération</h3>
+      <div class="bulletin-identite">
+        <span><span class="id-nom">${esc(p.nom)} ${esc(p.prenom)}</span> &nbsp;·&nbsp; ${esc(p.fonction)}${p.matiere?' — '+esc(p.matiere):''}</span>
+      </div>
+      <p class="desc" style="margin:6px 0 12px;">À compléter et signer chaque mois par l'intéressé(e) avant perception du salaire.</p>
+      <div class="table-wrap">
+        <table class="receipt-table fiche-paie-table">
+          <thead><tr><th>Information</th>${theadCols}</tr></thead>
+          <tbody>${bodyRows}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// Toutes les fiches du personnel actif, à imprimer en une fois (une page par personne).
+function buildFichesPaieAnnuellesHTML(){
+  const actifs = PERSONNEL.filter(p=>p.statut==='Actif').slice().sort((a,b)=>a.nom.localeCompare(b.nom));
+  return actifs.map((p,i)=> `<div style="${i<actifs.length-1?'page-break-after:always;':''}">${buildFichePaieAnnuelleHTML(p.id)}</div>`).join('');
+}
+
 /* ---------- Années scolaires : bascule N -> N+1 ---------- */
 
 // Classe suivante dans la progression pédagogique, selon l'ordre des classes
@@ -3077,9 +3159,10 @@ function renderPersonnel(){
       <div class="field"><label>Contact</label><input name="contact" placeholder="+226 ..."></div>
       <div class="field" id="new-personnel-salaire-field"><label>Salaire fixe mensuel (FCFA)</label><input name="salaireFixe" type="number" min="0" placeholder="Non-enseignant uniquement"></div>
       <div class="field"><label>Statut</label><select name="statut"><option>Actif</option><option>Congé</option><option>Parti</option></select></div>
+      <div class="field"><label>Nombre de mois de paie (année)</label><input name="nbMoisPaie" type="number" min="1" max="12" placeholder="ex: 10"></div>
       <button class="btn" type="submit">Ajouter</button>
     </form>
-    <p class="muted" style="margin-top:8px;">Enseignant Permanent : salaire mensuel calculé automatiquement selon les heures assurées par semaine et le niveau (barème dans Paramètres). Enseignant Vacataire : les heures du mois sont saisies directement dans Finances → Salaires. Le salaire fixe ne s'applique qu'au personnel non-enseignant.</p>
+    <p class="muted" style="margin-top:8px;">Enseignant Permanent : salaire mensuel calculé automatiquement selon les heures assurées par semaine et le niveau (barème dans Paramètres). Enseignant Vacataire : les heures du mois sont saisies directement dans Finances → Salaires. Le salaire fixe ne s'applique qu'au personnel non-enseignant. Le nombre de mois de paie sert à générer la fiche de paie annuelle à signer (onglet Documents), afin qu'elle s'arrête exactement au dernier mois d'activité de la personne.</p>
   </div>
 
   ${Object.entries(parFonction).filter(([f,list])=>list.length>0 || true).map(([fonction, liste])=> renderPersonnelCategoriePanel(fonction, liste)).join('')}
@@ -3158,7 +3241,8 @@ const DOC_TYPES = {
   convpaiement:   { label: 'Convocation — paiement',        cible: 'eleve' },
   convabsences:   { label: 'Convocation — absences/retards',cible: 'eleve' },
   carte:          { label: 'Carte scolaire',                cible: 'eleve' },
-  historique:     { label: 'Historique multi-années',       cible: 'eleve' }
+  historique:     { label: 'Historique multi-années',       cible: 'eleve' },
+  fichepaie:      { label: 'Fiche de paie annuelle',         cible: 'personnel' }
 };
 
 function renderDocuments(){
@@ -3202,6 +3286,10 @@ function renderDocuments(){
       <div class="field"><label>Date du rendez-vous</label><input type="date" id="doc-conv-date"></div>
       <div class="field"><label>Heure</label><input type="time" id="doc-conv-heure"></div>
       <div class="field"><label>Lieu</label><input type="text" id="doc-conv-lieu" value="${esc(PARAMS.convocationLieu)}"></div>`;
+  } else if(docTypeTab==='fichepaie'){
+    champsSpecifiques = `
+      <div class="field"><label>Mois de départ des fiches</label><input type="month" id="doc-paie-mois-debut" value="${esc(PARAMS.paie.moisDebutFiches)||''}"></div>
+      <div class="field" style="grid-column:1/-1;"><div class="muted">Le nombre de mois de paie de chaque personne se règle dans l'onglet Personnel (colonne « Mois de paie ») ; la fiche s'arrête exactement à ce nombre de mois.</div></div>`;
   }
 
   return `
@@ -3227,6 +3315,11 @@ function renderDocuments(){
         <div class="field"><label>Classe</label><select id="doc-carte-classe-select">${classesNoms.map(c=>`<option>${esc(c)}</option>`).join('') || '<option value="">Aucune classe configurée</option>'}</select></div>
       </div>
       <button class="btn secondary" id="btn-generer-cartes-classe" type="button">Générer les cartes de la classe</button>
+    </div>` : ''}
+    ${docTypeTab==='fichepaie' ? `
+    <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--line);">
+      <p class="desc" style="width:100%;margin-bottom:8px;">Ou générez en une fois les fiches de tout le personnel actif (une page par personne) :</p>
+      <button class="btn secondary" id="btn-generer-fiches-paie-toutes" type="button">Générer les fiches du personnel actif</button>
     </div>` : ''}
   </div>
   <div class="panel">
@@ -3985,9 +4078,9 @@ function renderPersonnelCategoriePanel(fonction, liste){
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Nom</th><th>Prénom</th><th>Matricule</th>${estEnseignantCat ? '<th>Matière</th><th>Type</th><th>Détail</th>' : '<th>Salaire fixe</th>'}<th>Contact</th><th>Statut</th><th></th></tr></thead>
+        <thead><tr><th>Nom</th><th>Prénom</th><th>Matricule</th>${estEnseignantCat ? '<th>Matière</th><th>Type</th><th>Détail</th>' : '<th>Salaire fixe</th>'}<th>Contact</th><th>Statut</th><th>Mois de paie</th><th></th></tr></thead>
         <tbody>
-        ${liste.length===0 ? `<tr class="empty-row"><td colspan="${estEnseignantCat?8:7}">Aucun membre dans cette catégorie.</td></tr>` :
+        ${liste.length===0 ? `<tr class="empty-row"><td colspan="${estEnseignantCat?9:8}">Aucun membre dans cette catégorie.</td></tr>` :
           liste.map(p=>{
             const cls = p.statut==='Actif'?'actif':(p.statut==='Congé'?'conge':'inactif');
             let colsSpecifiques;
@@ -4001,6 +4094,7 @@ function renderPersonnelCategoriePanel(fonction, liste){
               <td><input class="inline-num" style="width:130px;" data-action="edit-matricule-personnel" data-id="${p.id}" value="${esc(p.matricule)||''}" placeholder="—"></td>
               ${colsSpecifiques}<td>${esc(p.contact)||'—'}</td>
               <td><span class="badge ${cls}">${esc(p.statut)}</span>${estEnCongeAujourdhui(p.id) && p.statut!=='Congé' ? ' <span class="badge conge">En congé</span>' : ''}</td>
+              <td><input type="number" min="0" max="12" class="inline-num" style="width:60px;" data-action="edit-nb-mois-paie" data-id="${p.id}" value="${Number(p.nbMoisPaie||0)}"></td>
               <td><button class="btn danger small" data-action="del-personnel" data-id="${p.id}">Supprimer</button></td></tr>`;
           }).join('')}
         </tbody>
@@ -5117,6 +5211,14 @@ function fitBulletinHTML(html){
 
 function openPrint(html){
   html = fitBulletinHTML(html);
+  // Les fiches de paie annuelles (nombreuses colonnes mensuelles) tiennent bien mieux en
+  // paysage ; tous les autres documents restent en portrait (format A4 standard). Le format
+  // de page (@page) est global à toute l'impression, donc basculé dynamiquement selon le
+  // contenu à imprimer plutôt que fixé une fois pour toutes.
+  const orientStyle = document.getElementById('print-orientation-override');
+  if(orientStyle) orientStyle.textContent = html.includes('fiche-paie')
+    ? '@media print{ @page{ size:A4 landscape; margin:10mm; } }'
+    : '';
   const root = document.getElementById('print-preview-root');
   root.innerHTML = `
     <div class="print-preview-backdrop" id="print-preview-backdrop">
@@ -5357,6 +5459,9 @@ function buildBulletinHTML(eleveId, trimestre){
     recapLignes.push({
       libelle: trimestres[i],
       moyenne: dT.moyenneGenerale,
+      moyenneClasse: cT.moyenneClasse,
+      forte: cT.forte,
+      faible: cT.faible,
       rang: formatRangOrdinal(cT.rang, cT.exAequo),
       appreciation: appreciationPourMoyenne(dT.moyenneGenerale)
     });
@@ -5368,6 +5473,9 @@ function buildBulletinHTML(eleveId, trimestre){
     recapLignes.push({
       libelle: 'Bilan annuel',
       moyenne: moyAn,
+      moyenneClasse: classAn.moyenneClasse,
+      forte: classAn.forte,
+      faible: classAn.faible,
       rang: formatRangOrdinal(classAn.rang, classAn.exAequo),
       appreciation: appreciationPourMoyenne(moyAn),
       fort: true
@@ -5375,10 +5483,14 @@ function buildBulletinHTML(eleveId, trimestre){
     const suggestion = decisionSuggeree(moyAn, estClasseExamen(el.classe), el);
     decisionFinale = DECISIONS[eleveId] || suggestion || '—';
   }
+  const fmt20 = v => (v!==null && v!==undefined) ? v.toFixed(2)+'/20' : '—';
   const recapRows = recapLignes.map(r=>`
     <tr${r.fort?' class="bulletin-recap-fort"':''}>
       <td>${esc(r.libelle)}</td>
-      <td>${r.moyenne!==null?r.moyenne.toFixed(2)+'/20':'—'}</td>
+      <td>${fmt20(r.moyenne)}</td>
+      <td>${fmt20(r.moyenneClasse)}</td>
+      <td>${fmt20(r.forte)}</td>
+      <td>${fmt20(r.faible)}</td>
       <td>${esc(r.rang)}</td>
       <td>${esc(r.appreciation)}</td>
     </tr>
@@ -5401,7 +5513,7 @@ function buildBulletinHTML(eleveId, trimestre){
       </table>
 
       <table class="bulletin-recap">
-        <thead><tr><th>Trimestre</th><th>Moyenne</th><th>Rang</th><th>Appréciation</th></tr></thead>
+        <thead><tr><th>Trimestre</th><th>Moyenne</th><th>Moy. classe</th><th>Plus forte moy.</th><th>Plus faible moy.</th><th>Rang</th><th>Appréciation</th></tr></thead>
         <tbody>${recapRows}</tbody>
       </table>
       ${decisionFinale ? `<div class="bulletin-decision">Décision du conseil de classe : <strong>${esc(decisionFinale)}</strong></div>` : ''}
@@ -6196,7 +6308,8 @@ function attachHandlers(){
         niveauEnseignement: (estEnseignant && f.get('typePersonnel')==='Permanent') ? f.get('niveauEnseignement') : '',
         heuresSemaine: (estEnseignant && f.get('typePersonnel')==='Permanent') ? Number(f.get('heuresSemaine'))||0 : 0,
         contact: f.get('contact'), statut: f.get('statut'),
-        salaireFixe: !estEnseignant ? Number(f.get('salaireFixe'))||0 : 0 });
+        salaireFixe: !estEnseignant ? Number(f.get('salaireFixe'))||0 : 0,
+        nbMoisPaie: Number(f.get('nbMoisPaie'))||0 });
       await savePersonnel();
       showToast('Membre ajouté');
       render();
@@ -6230,6 +6343,12 @@ function attachHandlers(){
       input.addEventListener('change', async ()=>{
         const p = PERSONNEL.find(x=>x.id===input.dataset.id);
         if(p){ p.matricule = input.value.trim(); await savePersonnel(); showToast('Matricule mis à jour'); }
+      });
+    });
+    document.querySelectorAll('[data-action="edit-nb-mois-paie"]').forEach(input=>{
+      input.addEventListener('change', async ()=>{
+        const p = PERSONNEL.find(x=>x.id===input.dataset.id);
+        if(p){ p.nbMoisPaie = Number(input.value)||0; await savePersonnel(); showToast('Nombre de mois de paie mis à jour'); }
       });
     });
     document.querySelectorAll('[data-action="print-personnel-categorie"]').forEach(btn=>{
@@ -6336,6 +6455,10 @@ function attachHandlers(){
         const id = document.getElementById('doc-eleve-select')?.value;
         if(!id) return;
         html = buildHistoriqueEleveHTML(id);
+      } else if(docTypeTab==='fichepaie'){
+        const id = document.getElementById('doc-personnel-select')?.value;
+        if(!id) return;
+        html = buildFichePaieAnnuelleHTML(id);
       }
       document.getElementById('doc-preview').innerHTML = `
         <div style="border:1px solid var(--line);border-radius:8px;padding:20px;background:#fdfdfc;display:flex;justify-content:center;">${html}</div>
@@ -6345,6 +6468,15 @@ function attachHandlers(){
         const node = document.querySelector('#doc-preview .certificat, #doc-preview .attestation, #doc-preview .bulletin, #doc-preview .carte-scolaire-paire, #doc-preview .cartes-grille');
         if(node) openPrint(node.outerHTML);
       });
+    });
+    document.getElementById('doc-paie-mois-debut')?.addEventListener('change', async (e)=>{
+      PARAMS.paie.moisDebutFiches = e.target.value;
+      await saveParams();
+      showToast('Mois de départ enregistré');
+    });
+    document.getElementById('btn-generer-fiches-paie-toutes')?.addEventListener('click', ()=>{
+      if(!PARAMS.paie.moisDebutFiches){ showToast("Renseignez d'abord le mois de départ des fiches."); return; }
+      openPrint(buildFichesPaieAnnuellesHTML());
     });
     document.getElementById('btn-generer-cartes-classe')?.addEventListener('click', ()=>{
       const classe = document.getElementById('doc-carte-classe-select')?.value;
