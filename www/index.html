@@ -246,6 +246,9 @@
   .doc-pays{font-family:var(--serif);font-weight:700;font-size:12px;letter-spacing:.04em;color:var(--navy);}
   .doc-devise{font-size:9.5px;font-style:italic;color:var(--ink-soft);}
   .doc-ministere{font-size:9px;text-transform:uppercase;letter-spacing:.02em;color:var(--ink-soft);}
+  .doc-topline{display:flex; justify-content:space-between; gap:12px; font-size:9px; font-style:italic; color:var(--ink-soft); margin-bottom:4px;}
+  .doc-topline-col{display:flex; flex-direction:column;}
+  .doc-topline-droite{text-align:right; align-items:flex-end;}
   .activation-overlay{
     position:fixed;inset:0;z-index:9999;background:var(--navy-dark);
     display:flex;align-items:center;justify-content:center;padding:20px;
@@ -280,37 +283,68 @@
   .signature-table{width:100%;margin-top:22px;border:none;border-collapse:collapse;}
   .signature-table td{border:none;padding:0;width:50%;vertical-align:bottom;}
 
-  /* Bulletin de notes — occupe au moins 90% de la longueur de la page A4 imprimée.
-     Le flex + margin-top:auto sur la signature pousse celle-ci vers le bas, quel
-     que soit le nombre de matières, garantissant le remplissage minimal. */
+  /* Bulletin de notes — mise en page compacte tenant systématiquement sur une page A4.
+     Toutes les tailles descendantes sont exprimées en em, relatives au font-size posé
+     ici : fitBulletinToPage() (JS) réduit cette seule valeur, proportionnellement,
+     jusqu'à ce que le bulletin tienne sur une page — quel que soit le nombre de matières.
+     Le flex + margin-top:auto sur la signature pousse celle-ci vers le bas de page. */
   .bulletin-pleine-page{
     max-width:680px; min-height:249mm; box-sizing:border-box;
     display:flex; flex-direction:column;
-    font-size:12.5px;
+    font-size:12.5px; line-height:1.08;
   }
-  .bulletin-pleine-page .doc-pays{font-size:14px;}
-  .bulletin-pleine-page .doc-devise{font-size:11px;}
-  .bulletin-pleine-page .doc-ministere{font-size:10.5px;}
-  .bulletin-pleine-page .doc-logo{max-width:85px;max-height:85px;}
-  .bulletin-pleine-page h2{font-size:19px;}
-  .bulletin-pleine-page h3{font-size:14px;}
-  .bulletin-pleine-page .bulletin-eleve-line{font-size:13.5px;margin-bottom:14px;}
-  .bulletin-pleine-page .bulletin-table td, .bulletin-pleine-page .bulletin-table th{padding:7px 9px;font-size:12px;}
-  .bulletin-pleine-page .bulletin-subhead{font-size:13px;margin:18px 0 7px 0;padding-bottom:4px;}
-  .bulletin-pleine-page .stat-chip{padding:6px 12px;}
-  .bulletin-pleine-page .stat-chip span{font-size:10px;}
-  .bulletin-pleine-page .stat-chip b{font-size:14px;}
-  .bulletin-pleine-page .stat-row{gap:8px;margin-bottom:8px;}
-  .bulletin-pleine-page .signature-table{margin-top:auto;padding-top:40px;}
-  .bulletin-pleine-page .sig-label{font-size:11.5px;}
-  .bulletin-pleine-page .sig-line{margin-top:36px;font-size:10px;}
+  .bulletin-pleine-page .doc-officiel{margin-bottom:0.55em;}
+  .bulletin-pleine-page .doc-topline{font-size:0.8em; margin-bottom:0.4em;}
+  .bulletin-pleine-page .doc-pays{font-size:1.12em;}
+  .bulletin-pleine-page .doc-devise{font-size:0.88em;}
+  .bulletin-pleine-page .doc-ministere{font-size:0.84em;}
+  .bulletin-pleine-page .doc-logo{max-width:6.6em;max-height:6.6em;margin-bottom:0.3em;}
+  .bulletin-pleine-page h2{font-size:1.52em;}
+  .bulletin-pleine-page h3{font-size:1.12em;margin-bottom:8px;}
+  .bulletin-pleine-page .bulletin-identite{
+    display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:3px 16px;
+    font-size:1.04em; margin:0 0 10px 0; padding-bottom:6px; border-bottom:1.5px solid var(--navy);
+  }
+  .bulletin-pleine-page .bulletin-identite .id-nom{font-family:var(--serif); font-weight:700; color:var(--navy); font-size:1.08em;}
+  .bulletin-pleine-page .badge-redoublant{
+    display:inline-block; border:1px solid var(--gold); background:var(--gold-soft); color:#6b4e02;
+    border-radius:4px; padding:1px 7px; font-size:0.76em; font-weight:700; text-transform:uppercase;
+    letter-spacing:.03em; margin-left:6px; vertical-align:middle;
+  }
+  .bulletin-pleine-page .bulletin-info-ligne{font-size:0.94em; margin:0 0 3px 0;}
+  .bulletin-pleine-page .bulletin-table td, .bulletin-pleine-page .bulletin-table th{padding:0.26em 0.45em; font-size:0.92em;}
+  .bulletin-pleine-page .bulletin-table th{background:#f4f2ec;}
+  .bulletin-pleine-page .bulletin-table{table-layout:fixed;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(1), .bulletin-pleine-page .bulletin-table td:nth-child(1){width:19%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(2), .bulletin-pleine-page .bulletin-table td:nth-child(2){width:6%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(3), .bulletin-pleine-page .bulletin-table td:nth-child(3){width:7%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(4), .bulletin-pleine-page .bulletin-table td:nth-child(4){width:7%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(5), .bulletin-pleine-page .bulletin-table td:nth-child(5){width:8%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(6), .bulletin-pleine-page .bulletin-table td:nth-child(6){width:7%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(7), .bulletin-pleine-page .bulletin-table td:nth-child(7){width:8%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(8), .bulletin-pleine-page .bulletin-table td:nth-child(8){width:9%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(9), .bulletin-pleine-page .bulletin-table td:nth-child(9){width:8%;}
+  .bulletin-pleine-page .bulletin-table th:nth-child(10), .bulletin-pleine-page .bulletin-table td:nth-child(10){width:21%;}
+  .bulletin-pleine-page .bulletin-table td{overflow:hidden; word-break:break-word;}
+  .bulletin-pleine-page .bulletin-table th{overflow:hidden; white-space:normal; line-height:1.1;}
+  .bulletin-pleine-page .bulletin-cat-row td{background:#f4f2ec; font-style:italic;}
+  .bulletin-pleine-page .bulletin-reduc-row td{color:#a02020; font-size:0.82em; padding:0.2em 0.45em;}
+  .bulletin-pleine-page .bulletin-totaux-row td{border-top:1.5px solid var(--navy);}
+  .bulletin-pleine-page .bulletin-recap{width:100%; border-collapse:collapse; margin:0.6em 0 0 0; font-size:0.9em;}
+  .bulletin-pleine-page .bulletin-recap th{background:var(--navy); color:#fff; font-family:var(--serif); font-weight:700; padding:0.26em 0.5em; text-align:left; font-size:0.9em;}
+  .bulletin-pleine-page .bulletin-recap td{border:1px solid var(--line); padding:0.24em 0.5em;}
+  .bulletin-pleine-page .bulletin-recap tr.bulletin-recap-fort td{background:var(--gold-soft); font-weight:700;}
+  .bulletin-pleine-page .bulletin-decision{font-size:0.92em; margin:0.4em 0 0 0; padding:0.28em 0.55em; background:var(--gold-soft); border:1px solid var(--gold);}
+  .bulletin-pleine-page .signature-table{margin-top:auto; padding-top:1.3em;}
+  .bulletin-pleine-page .sig-label{font-size:0.9em;}
+  .bulletin-pleine-page .sig-line{margin-top:1.8em; font-size:0.78em;}
   .sig-label{font-size:10px;color:#555;}
   .sig-line{margin-top:26px;border-top:1px solid #999;width:75%;font-size:9px;color:#777;padding-top:3px;}
   /* Signature par matière, dans une cellule du tableau de notes du bulletin */
   .mini-sig-nom{font-size:8.5px;color:#333;white-space:nowrap;}
   .mini-sig-line{margin-top:9px;border-top:1px solid #999;width:100%;}
-  .bulletin-pleine-page .mini-sig-nom{font-size:10.5px;}
-  .bulletin-pleine-page .mini-sig-line{margin-top:15px;}
+  .bulletin-pleine-page .mini-sig-nom{font-size:0.82em;}
+  .bulletin-pleine-page .mini-sig-line{margin-top:0.7em;}
 
   /* ---------- Certificats administratifs (scolarité, non-redevance) — format sobre officiel ---------- */
   .certificat{font-family:var(--sans);color:#111;max-width:620px;margin:0 auto;min-height:230mm;box-sizing:border-box;display:flex;flex-direction:column;}
@@ -630,6 +664,7 @@ const DEFAULT_PARAMS = {
   directeurNom: '',
   directeurTelephone: '',
   directeurTitre: 'Directeur', // ex: "Directeur", "Proviseur", "Directrice", "Proviseure"...
+  etablissementDevise: '', // devise propre à l'établissement, affichée en haut à gauche du bulletin
   lieuCarteScolaire: '', // lieu de délivrance affiché au verso de la carte scolaire (ex: "Ouagadougou")
   carte: {
     titre: 'Carte scolaire',
@@ -690,6 +725,13 @@ const DEFAULT_PARAMS = {
     {id:'mf1', label:'Félicitations', texte:'pour avoir obtenu d\'excellents résultats', affichage:'moyenne', seuilMoyenne:16},
     {id:'mf2', label:"Tableau d'honneur", texte:'pour ses bons résultats et son sérieux', affichage:'moyenne', seuilMoyenne:14},
     {id:'mf3', label:'Encouragements', texte:'pour ses efforts et sa progression', affichage:'progression', seuilMoyenne:10}
+  ],
+  appreciationsBulletin: [
+    {id:'ab1', label:'Excellent', seuil:16},
+    {id:'ab2', label:'Très bien', seuil:14},
+    {id:'ab3', label:'Bien', seuil:12},
+    {id:'ab4', label:'Assez bien', seuil:10},
+    {id:'ab5', label:'Insuffisant', seuil:0}
   ],
   motifsReconnaissance: [
     "pour son engagement et la qualité de son enseignement durant l'année scolaire",
@@ -1021,6 +1063,7 @@ async function loadAll(){
   if(PARAMS.seuilAbsenceJoursSemaine===undefined) PARAMS.seuilAbsenceJoursSemaine = 2;
   if(!PARAMS.trimestresDates) PARAMS.trimestresDates = {};
   if(PARAMS.directeurNom===undefined) PARAMS.directeurNom = '';
+  if(PARAMS.etablissementDevise===undefined) PARAMS.etablissementDevise = '';
   if(PARAMS.directeurTelephone===undefined) PARAMS.directeurTelephone = '';
   if(PARAMS.lieuCarteScolaire===undefined) PARAMS.lieuCarteScolaire = '';
   if(PARAMS.directeurTitre===undefined) PARAMS.directeurTitre = 'Directeur';
@@ -1058,6 +1101,7 @@ async function loadAll(){
     if(typeof m==='string') return {id:uid(), label:'Distinction', texte:m, affichage:/progr/i.test(m)?'progression':'moyenne', seuilMoyenne:10};
     return { id: m.id||uid(), label: m.label||'Distinction', texte: m.texte, affichage: m.affichage||'moyenne', seuilMoyenne: m.seuilMoyenne!==undefined?m.seuilMoyenne:10 };
   });
+  if(PARAMS.appreciationsBulletin===undefined) PARAMS.appreciationsBulletin = [{id:'ab1',label:'Excellent',seuil:16},{id:'ab2',label:'Très bien',seuil:14},{id:'ab3',label:'Bien',seuil:12},{id:'ab4',label:'Assez bien',seuil:10},{id:'ab5',label:'Insuffisant',seuil:0}];
   if(PARAMS.avertissementBaisseTitre===undefined) PARAMS.avertissementBaisseTitre = "Avis de suivi scolaire";
   if(PARAMS.avertissementBaisseIntro===undefined) PARAMS.avertissementBaisseIntro = "La Direction de l'établissement {etablissement} attire l'attention de la famille sur l'évolution des résultats de :";
   if(PARAMS.avertissementBaisseMentionFinale===undefined) PARAMS.avertissementBaisseMentionFinale = "Un accompagnement renforcé est vivement recommandé afin d'inverser cette tendance.";
@@ -1120,6 +1164,12 @@ async function loadAll(){
     await save('annee-active-data', anneeActiveId);
   }
   anneeAffichee = anneeActiveId;
+
+  // Synchronise automatiquement « a déjà redoublé » avec l'historique réel de
+  // l'établissement (comparaison classe actuelle / classe de l'année précédente) —
+  // ne fait que confirmer un « Oui », jamais l'inverse (un redoublement survenu
+  // avant l'arrivée dans l'établissement reste une saisie manuelle sur la fiche élève).
+  ELEVES.forEach(e => { if(estRedoublantAnneeCourante(e.id)) e.aDejaRedouble = true; });
 
   // Migration des anciennes notes (une note unique par matière/trimestre) vers le nouveau format devoir1/devoir2/composition
   const needsMigration = NOTES.some(n => n.devoir1===undefined && n.composition===undefined);
@@ -1305,6 +1355,20 @@ function printHeader(){
         <div class="doc-pays">${esc(PARAMS.paysNom)}</div>
         <div class="doc-devise">${esc(PARAMS.devise)}</div>
       </div>
+    </div>`;
+}
+
+// Ligne libre au-dessus de l'en-tête officiel (doc-officiel), séparée de celui-ci pour ne
+// pas le modifier : colonne gauche / colonne droite, chacune pouvant empiler plusieurs
+// lignes (prévu pour grandir — plusieurs retours à la ligne par colonne si besoin).
+function buildTopline(lignesGauche, lignesDroite){
+  const gauche = (lignesGauche||[]).filter(Boolean).map(l=>`<div>${esc(l)}</div>`).join('');
+  const droite = (lignesDroite||[]).filter(Boolean).map(l=>`<div>${esc(l)}</div>`).join('');
+  if(!gauche && !droite) return '';
+  return `
+    <div class="doc-topline">
+      <div class="doc-topline-col">${gauche}</div>
+      <div class="doc-topline-col doc-topline-droite">${droite}</div>
     </div>`;
 }
 
@@ -1586,7 +1650,7 @@ function computeTrimestre(eleveId, trimestre){
   const lignes = notes.map(n=>{
     const info = getMatiereInfo(n, classe);
     const calc = moyenneMatiere(n);
-    return { matiere: info.nom, coefficient: info.coefficient, categorie: info.categorie, enseignant: info.enseignant, ...calc };
+    return { matiere: info.nom, matiereId: n.matiereId, coefficient: info.coefficient, categorie: info.categorie, enseignant: info.enseignant, ...calc };
   }).filter(l => l.moyenne!==null && !(dispenseSport && l.categorie==='Sport'));
 
   let totalPoints=0, totalCoeff=0;
@@ -1616,6 +1680,26 @@ function computeTrimestre(eleveId, trimestre){
 
   const moyenneGenerale = totalCoeff>0 ? totalPointsAjuste/totalCoeff : null;
   return { lignes, sousMoyennes, moyenneGenerale, totalCoeff, totalPoints, reductionConduite, reductionAbsence, totalPointsAjuste, dispenseSport, motifSportDispense: reduc.motifSportDispense||'' };
+}
+
+// Moyenne de la classe pour chaque matière, à un trimestre donné : moyenne (sur les élèves
+// notés dans cette matière) de la moyenne de chacun dans cette matière. Utilisé pour la
+// colonne « Moy. classe » du tableau de notes du bulletin.
+function moyennesClasseParMatiere(classe, trimestre){
+  const eleves = ELEVES.filter(e=>e.classe===classe);
+  const sommes = {}; // matiereId -> {total, count}
+  eleves.forEach(e=>{
+    NOTES.filter(n=>n.eleveId===e.id && n.trimestre===trimestre).forEach(n=>{
+      const moy = moyenneMatiere(n).moyenne;
+      if(moy===null) return;
+      if(!sommes[n.matiereId]) sommes[n.matiereId] = {total:0, count:0};
+      sommes[n.matiereId].total += moy;
+      sommes[n.matiereId].count += 1;
+    });
+  });
+  const resultat = {};
+  Object.keys(sommes).forEach(mid=>{ resultat[mid] = sommes[mid].total/sommes[mid].count; });
+  return resultat;
 }
 
 // Classement d'une classe pour un trimestre donné (ou moyenne annuelle si trimestre==='ANNEE')
@@ -1860,6 +1944,32 @@ function decisionEffective(eleve){
 }
 
 function anneeLibelle(id){ return ANNEES.find(a=>a.id===id)?.libelle || '—'; }
+
+// Identifie l'année réellement affichée (utile quand ELEVES a été temporairement
+// remplacé par withArchiveContext pour consulter/imprimer une année archivée).
+function anneeAffichageCourante(){
+  for(const a of ANNEES){ if(ARCHIVES[a.id] && ARCHIVES[a.id].eleves===ELEVES) return a.id; }
+  return anneeActiveId;
+}
+
+// Détecte automatiquement si un élève redouble sa classe CETTE année, en comparant
+// sa classe actuelle à celle qu'il avait dans l'archive de l'année précédente.
+// Entièrement déduit de l'historique de l'établissement : aucune saisie manuelle requise.
+// Retourne false (détection impossible) s'il n'y a pas d'année antérieure archivée pour
+// cet élève — c'est là que la case « a déjà redoublé » de la fiche élève garde son utilité,
+// pour les élèves ayant redoublé avant leur arrivée dans l'établissement.
+function estRedoublantAnneeCourante(eleveId){
+  const el = ELEVES.find(e=>e.id===eleveId);
+  if(!el) return false;
+  const idAffichee = anneeAffichageCourante();
+  const idx = ANNEES.findIndex(a=>a.id===idAffichee);
+  if(idx<=0) return false;
+  const archivePrec = ARCHIVES[ANNEES[idx-1].id];
+  if(!archivePrec) return false;
+  const elPrec = (archivePrec.eleves||[]).find(e=>e.id===eleveId);
+  if(!elPrec) return false;
+  return elPrec.classe === el.classe;
+}
 
 // Exécute la bascule N -> N+1 : archive l'année en cours, applique le devenir
 // de chaque élève (passe / redouble / exclu), remet à zéro notes/décisions/
@@ -2333,7 +2443,9 @@ function renderEleves(){
       <div class="field"><label>Année d'enregistrement dans l'établissement</label><input name="anneeEnregistrement" value="${esc(anneeLibelle(anneeActiveId))}" placeholder="ex: 2025-2026"></div>
       <div class="field"><label>Frais annuel (FCFA)</label><input id="new-eleve-frais" name="fraisAnnuel" type="number" min="0"></div>
       <div class="field"><label>Statut</label><select name="statut"><option>Actif</option><option>Inactif</option></select></div>
-      <div class="field"><label>A déjà redoublé dans le cycle</label><select name="aDejaRedouble"><option value="">Non</option><option value="1">Oui</option></select></div>
+      <div class="field"><label>A déjà redoublé avant son arrivée dans l'établissement</label><select name="aDejaRedouble"><option value="">Non</option><option value="1">Oui</option></select>
+        <p class="muted" style="margin-top:4px;font-size:11.5px;">Un redoublement survenant au sein de l'établissement est désormais détecté et affiché automatiquement sur le bulletin — ce champ ne sert que pour un élève déjà redoublant à son arrivée.</p>
+      </div>
       <button class="btn" type="submit">Ajouter l'élève</button>
     </form>
     ${PARAMS.classes.length===0 ? '<p class="muted" style="margin-top:8px;">Aucune classe configurée — ajoutez-en dans l\'onglet « Paramètres ».</p>' : ''}
@@ -3214,6 +3326,23 @@ function mentionSuggereePour(eleveId, trimestre){
   if(moy===null) return null;
   const eligibles = PARAMS.mentionsFelicitations.filter(m=> moy >= (Number(m.seuilMoyenne)||0)).sort((a,b)=> (Number(b.seuilMoyenne)||0)-(Number(a.seuilMoyenne)||0));
   return eligibles[0] || null;
+}
+
+// Appréciation du bulletin (Excellent / Très bien / ...) déduite automatiquement de la
+// moyenne, selon les seuils configurables dans Paramètres (PARAMS.appreciationsBulletin).
+function appreciationPourMoyenne(moyenne){
+  if(moyenne===null || moyenne===undefined) return '—';
+  const liste = (PARAMS.appreciationsBulletin||[]).slice().sort((a,b)=>(Number(b.seuil)||0)-(Number(a.seuil)||0));
+  const trouve = liste.find(a=> moyenne >= (Number(a.seuil)||0));
+  return trouve ? trouve.label : '—';
+}
+
+// Formate un rang en ordinal (« 1er », « 3e ex »...) SANS l'effectif de la classe —
+// l'effectif est affiché une seule fois, en haut du bulletin, pour éviter la répétition
+// systématique du format « rang / effectif » à chaque ligne du bulletin.
+function formatRangOrdinal(rang, exAequo){
+  if(!rang) return '—';
+  return rang + (rang===1?'er':'e') + (exAequo?' ex':'');
 }
 
 function buildAttestationFelicitationsHTML(eleveId, trimestre, mentionObj){
@@ -4552,6 +4681,7 @@ function renderParametres(){
       <div class="field"><label>Titre du responsable</label><input name="directeurTitre" value="${esc(PARAMS.directeurTitre)}" placeholder="ex: Directeur, Proviseur, Directrice..."></div>
       <div class="field"><label>Nom du responsable</label><input name="directeurNom" value="${esc(PARAMS.directeurNom)}" placeholder="ex: M. Ouédraogo Jean"></div>
       <div class="field"><label>Numéro du responsable</label><input name="directeurTelephone" value="${esc(PARAMS.directeurTelephone)}" placeholder="+226 ..."></div>
+      <div class="field"><label>Devise de l'établissement (bulletin)</label><input name="etablissementDevise" value="${esc(PARAMS.etablissementDevise)}" placeholder="ex: Discipline - Travail - Réussite"></div>
       <button class="btn gold" type="submit">Enregistrer</button>
     </form>
     <p class="muted" style="margin-top:8px;">Les deux pourcentages doivent totaliser 100 (actuellement : ${Number(PARAMS.ponderationDevoirs)+Number(PARAMS.ponderationComposition)}). Le titre (« Directeur », « Proviseur »...) remplace automatiquement le mot « Directeur » partout où il apparaît sur les documents imprimés.</p>
@@ -4778,6 +4908,7 @@ function renderParametres(){
   </div>
 
   ${renderMentionsFelicitationsEditor()}
+  ${renderAppreciationsBulletinEditor()}
   ${renderListEditor('Motifs — attestation de reconnaissance', 'motifsReconnaissance', "Liste proposée dans le menu déroulant « Motif » lors de la génération d'une attestation de reconnaissance.")}
 
   <div class="panel">
@@ -4866,6 +4997,33 @@ function renderMentionsFelicitationsEditor(){
   `;
 }
 
+function renderAppreciationsBulletinEditor(){
+  const items = (PARAMS.appreciationsBulletin||[]).slice().sort((a,b)=>(Number(b.seuil)||0)-(Number(a.seuil)||0));
+  const rows = items.map(a=>`
+    <tr data-appreciation-id="${a.id}">
+      <td><input class="inline-num" style="width:160px;" data-field="label" data-appreciation-id="${a.id}" value="${esc(a.label||'')}"></td>
+      <td><input class="inline-num" type="number" min="0" max="20" step="0.25" style="width:70px;" data-field="seuil" data-appreciation-id="${a.id}" value="${Number(a.seuil)||0}"></td>
+      <td><button class="btn danger" data-action="del-appreciation" data-appreciation-id="${a.id}">Suppr.</button></td>
+    </tr>
+  `).join('');
+  return `
+  <div class="panel">
+    <div class="panel-head"><h3>Appréciations du bulletin</h3><p class="desc" style="width:100%;">L'appréciation imprimée sur le bulletin (Excellent, Très bien...) est choisie automatiquement selon la moyenne obtenue par l'élève, à partir de la moyenne minimale la plus élevée qu'il atteint.</p></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Libellé</th><th>Moyenne minimale</th><th></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="3">Aucune appréciation.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <form id="form-ajout-appreciation" class="form-grid" style="margin-top:14px;">
+      <div class="field"><label>Libellé</label><input name="label" required placeholder="ex: Bien"></div>
+      <div class="field"><label>Moyenne minimale</label><input name="seuil" type="number" min="0" max="20" step="0.25" value="12"></div>
+      <button class="btn gold" type="submit">Ajouter</button>
+    </form>
+  </div>
+  `;
+}
+
 // Dates de début/fin de chaque trimestre : sert à rattacher automatiquement une absence
 // ou un retard (qui n'ont qu'une date) à un trimestre, pour le classement d'assiduité par classe.
 function renderDatesTrimestresPanel(){
@@ -4924,7 +5082,41 @@ function renderCreneauxEditor(){
 // Affiche un aperçu à l'écran du document avant impression, pour que l'utilisateur
 // puisse vérifier le contenu et annuler si besoin, plutôt que d'ouvrir directement
 // la boîte de dialogue d'impression.
+// Réduit proportionnellement chaque bulletin de notes pleine page (.bulletin-pleine-page)
+// contenu dans le HTML fourni — police et espacements ensemble, via le font-size de base
+// exprimé en em dans le CSS — jusqu'à ce qu'il tienne sur une page A4 (marges de 10mm),
+// quel que soit le nombre de matières de l'élève. Les autres documents ne sont pas mesurés.
+function fitBulletinHTML(html){
+  if(!html.includes('bulletin-pleine-page')) return html;
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute; left:-9999px; top:0; visibility:hidden;';
+  probe.innerHTML = html;
+  document.body.appendChild(probe);
+
+  const jauge = document.createElement('div');
+  jauge.style.cssText = 'position:absolute; height:273mm; width:0;'; // 277mm de zone imprimable, marge de sécurité incluse
+  document.body.appendChild(jauge);
+  const maxHeightPx = jauge.getBoundingClientRect().height;
+  document.body.removeChild(jauge);
+
+  probe.querySelectorAll('.bulletin-pleine-page').forEach(bp=>{
+    let fs = 12.5;
+    bp.style.fontSize = fs+'px';
+    let h = bp.getBoundingClientRect().height;
+    while(h > maxHeightPx && fs > 5.5){
+      fs -= 0.25;
+      bp.style.fontSize = fs+'px';
+      h = bp.getBoundingClientRect().height;
+    }
+  });
+
+  const resultat = probe.innerHTML;
+  document.body.removeChild(probe);
+  return resultat;
+}
+
 function openPrint(html){
+  html = fitBulletinHTML(html);
   const root = document.getElementById('print-preview-root');
   root.innerHTML = `
     <div class="print-preview-backdrop" id="print-preview-backdrop">
@@ -5104,6 +5296,9 @@ function statChip(label, value, highlight){
   return `<div class="stat-chip${highlight?' highlight':''}"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
 }
 
+// Cellule compacte de la grille de synthèse du bulletin de notes (voir buildBulletinHTML).
+// (fonction historique de mise en grille du bulletin, remplacée par un tableau récapitulatif)
+
 function buildBulletinHTML(eleveId, trimestre){
   const el = ELEVES.find(e=>e.id===eleveId);
   if(!el) return '<p>Élève introuvable.</p>';
@@ -5114,101 +5309,102 @@ function buildBulletinHTML(eleveId, trimestre){
   const data = computeTrimestre(eleveId, trimestre);
   const classement = rangDansClasse(eleveId, el.classe, trimestre);
   const profPrincipal = PROF_PRINCIPAL[el.classe] || '';
+  // Statut de redoublement déduit automatiquement de l'historique de l'établissement
+  // (voir estRedoublantAnneeCourante) — n'a plus besoin d'être saisi à la main.
+  const redoublant = estRedoublantAnneeCourante(eleveId);
+  const moyClasseParMatiere = moyennesClasseParMatiere(el.classe, trimestre);
 
-  const rows = data.lignes.map(l=>`
+  // Matières groupées par catégorie (ordre : PARAMS.categoriesMatieres) avec, à la fin de
+  // chaque catégorie, une ligne de sous-moyenne — avant de passer à la catégorie suivante.
+  const ligneHTML = l => {
+    const moyClasse = moyClasseParMatiere[l.matiereId];
+    return `
     <tr><td>${esc(l.matiere)}</td><td>${l.coefficient}</td>
     <td>${l.d1!==null?l.d1:'—'}</td><td>${l.d2!==null?l.d2:'—'}</td>
     <td>${l.moyDevoirs!==null?l.moyDevoirs.toFixed(2):'—'}</td>
     <td>${l.comp!==null?l.comp.toFixed(2):'—'}</td>
     <td><strong>${l.moyenne.toFixed(2)}</strong></td>
+    <td>${moyClasse!==undefined?moyClasse.toFixed(2):'—'}</td>
     <td>${(l.moyenne*l.coefficient).toFixed(2)}</td>
     <td>${l.enseignant?`<div class="mini-sig-nom">${esc(l.enseignant)}</div>`:''}<div class="mini-sig-line"></div></td></tr>
-  `).join('');
+  `;};
+  let rows = '';
+  Object.keys(data.sousMoyennes).forEach(cat=>{
+    const lignesCat = data.lignes.filter(l=>l.categorie===cat);
+    if(!lignesCat.length) return;
+    rows += lignesCat.map(ligneHTML).join('');
+    const sm = data.sousMoyennes[cat];
+    rows += `<tr class="bulletin-cat-row"><td colspan="6" style="text-align:right;"><em>Sous-moyenne — ${esc(cat)}</em></td><td><strong>${sm!==null?sm.toFixed(2):'—'}</strong></td><td colspan="3"></td></tr>`;
+  });
 
-  const totauxRow = `
+  // Totaux, puis réductions et total après réductions, en fin du tableau des matières.
+  const totauxHTML = rows ? `
     <tr class="bulletin-totaux-row"><td style="text-align:right;"><strong>Totaux</strong></td>
     <td><strong>${data.totalCoeff}</strong></td>
-    <td colspan="4"></td>
-    <td></td>
-    <td><strong>${data.totalPoints.toFixed(2)}</strong></td>
-    <td></td></tr>
-  `;
+    <td colspan="4"></td><td></td>
+    <td><strong>${classement.moyenneClasse!==null?classement.moyenneClasse.toFixed(2):'—'}</strong></td>
+    <td><strong>${data.totalPoints.toFixed(2)}</strong></td><td></td></tr>
+    <tr class="bulletin-reduc-row"><td colspan="10" style="text-align:right;">Réductions — conduite : -${data.reductionConduite.toFixed(2)} pt &nbsp;·&nbsp; absence/retard : -${data.reductionAbsence.toFixed(2)} pt</td></tr>
+    <tr class="bulletin-totaux-row"><td colspan="8" style="text-align:right;"><strong>Total après réductions</strong></td><td><strong>${data.totalPointsAjuste.toFixed(2)}</strong></td><td></td></tr>
+  ` : '';
 
-  const sousMoyChips = Object.entries(data.sousMoyennes).map(([cat,val])=>
-    statChip(cat, val!==null?val.toFixed(2)+'/20':'—')
-  ).join('');
-
-  const rangChips = [
-    statChip('Moyenne du trimestre', data.moyenneGenerale!==null?data.moyenneGenerale.toFixed(2)+'/20':'—', true),
-    statChip('Effectif de la classe', classement.effectif),
-    statChip('Rang', classement.rang?classement.rang+(classement.exAequo?' ex æquo':''):'—'),
-    statChip('Moyenne de la classe', classement.moyenneClasse!==null?classement.moyenneClasse.toFixed(2)+'/20':'—'),
-    statChip('Plus forte moyenne', classement.forte!==null?classement.forte.toFixed(2)+'/20':'—'),
-    statChip('Plus faible moyenne', classement.faible!==null?classement.faible.toFixed(2)+'/20':'—')
-  ].join('');
-
-  const disciplineBlock = `
-    <div class="bulletin-subhead">Discipline et total des points</div>
-    <div class="stat-row">
-      ${statChip('Réduction conduite', '-'+data.reductionConduite.toFixed(2)+' pt'+(data.reductionConduite>1?'s':''))}
-      ${statChip('Réduction absence/retard', '-'+data.reductionAbsence.toFixed(2)+' pt'+(data.reductionAbsence>1?'s':''))}
-      ${statChip('Total des points après réductions', data.totalPointsAjuste.toFixed(2), true)}
-    </div>
-  `;
-
-  // Historique des trimestres précédents (T2 affiche T1 ; T3 affiche T1 et T2), en ligne compacte
-  let historique = '';
-  if(idxT>=1){
-    const chips = [];
-    for(let i=0;i<idxT;i++){
-      const m = computeTrimestre(eleveId, trimestres[i]).moyenneGenerale;
-      chips.push(statChip('Moy. '+trimestres[i], m!==null?m.toFixed(2)+'/20':'—'));
-    }
-    historique = `<div class="stat-row">${chips.join('')}</div>`;
+  // Tableau récapitulatif : Trimestre | Moyenne | Rang | Appréciation — une ligne par
+  // trimestre déjà écoulé, plus une ligne « Bilan annuel » au dernier trimestre.
+  const recapLignes = [];
+  for(let i=0;i<=idxT;i++){
+    const dT = i===idxT ? data : computeTrimestre(eleveId, trimestres[i]);
+    const cT = i===idxT ? classement : rangDansClasse(eleveId, el.classe, trimestres[i]);
+    recapLignes.push({
+      libelle: trimestres[i],
+      moyenne: dT.moyenneGenerale,
+      rang: formatRangOrdinal(cT.rang, cT.exAequo),
+      appreciation: appreciationPourMoyenne(dT.moyenneGenerale)
+    });
   }
-
-  // Bloc annuel (uniquement au dernier trimestre)
-  let blocAnnuel = '';
+  let decisionFinale = '';
   if(idxT === trimestres.length-1){
     const moyAn = moyenneAnnuelle(eleveId);
     const classAn = rangDansClasse(eleveId, el.classe, 'ANNEE');
+    recapLignes.push({
+      libelle: 'Bilan annuel',
+      moyenne: moyAn,
+      rang: formatRangOrdinal(classAn.rang, classAn.exAequo),
+      appreciation: appreciationPourMoyenne(moyAn),
+      fort: true
+    });
     const suggestion = decisionSuggeree(moyAn, estClasseExamen(el.classe), el);
-    const decisionFinale = DECISIONS[eleveId] || suggestion || '—';
-    blocAnnuel = `
-      <div class="bulletin-subhead">Bilan annuel</div>
-      <div class="stat-row">
-        ${statChip('Moyenne annuelle', moyAn!==null?moyAn.toFixed(2)+'/20':'—', true)}
-        ${statChip('Effectif de la classe', classAn.effectif)}
-        ${statChip('Rang annuel', classAn.rang?classAn.rang+(classAn.exAequo?' ex æquo':''):'—')}
-        ${statChip('Moy. classe annuelle', classAn.moyenneClasse!==null?classAn.moyenneClasse.toFixed(2)+'/20':'—')}
-        ${statChip('Forte moy. annuelle', classAn.forte!==null?classAn.forte.toFixed(2)+'/20':'—')}
-        ${statChip('Faible moy. annuelle', classAn.faible!==null?classAn.faible.toFixed(2)+'/20':'—')}
-        ${statChip('Décision finale', decisionFinale, true)}
-      </div>
-    `;
+    decisionFinale = DECISIONS[eleveId] || suggestion || '—';
   }
+  const recapRows = recapLignes.map(r=>`
+    <tr${r.fort?' class="bulletin-recap-fort"':''}>
+      <td>${esc(r.libelle)}</td>
+      <td>${r.moyenne!==null?r.moyenne.toFixed(2)+'/20':'—'}</td>
+      <td>${esc(r.rang)}</td>
+      <td>${esc(r.appreciation)}</td>
+    </tr>
+  `).join('');
 
   return `
     <div class="bulletin bulletin-pleine-page">
       ${printHeader()}
+      ${buildTopline([PARAMS.etablissementDevise], ['Année scolaire : '+anneeLibelle(anneeAffichageCourante())])}
       <h3>Bulletin de notes — ${esc(trimestre)}</h3>
-      <p class="bulletin-eleve-line">Élève : <strong>${esc(el.nom)} ${esc(el.prenom)}</strong> &nbsp;·&nbsp; Classe : ${esc(el.classe)} &nbsp;·&nbsp; Aptitude sportive : ${data.dispenseSport ? `Dispensé${data.motifSportDispense?' ('+esc(data.motifSportDispense)+')':''}` : 'Apte'}</p>
+      <div class="bulletin-identite">
+        <span><span class="id-nom">${esc(el.nom)} ${esc(el.prenom)}</span> &nbsp;·&nbsp; Classe : ${esc(el.classe)}${redoublant?'<span class="badge-redoublant">Redoublant(e)</span>':''}</span>
+      </div>
+      <div class="bulletin-info-ligne">Effectif de la classe : <strong>${classement.effectif}</strong></div>
+      <div class="bulletin-info-ligne">Aptitude sportive : ${data.dispenseSport ? `Dispensé${data.motifSportDispense?' ('+esc(data.motifSportDispense)+')':''}` : 'Apte'}</div>
 
       <table class="receipt-table bulletin-table">
-        <thead><tr><th>Matière</th><th>Coef.</th><th>Dev. 1</th><th>Dev. 2</th><th>Moy. dev.</th><th>Compo.</th><th>Moyenne</th><th>Points</th><th>Signature</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="9">Aucune note pour ce trimestre.</td></tr>'}${rows ? totauxRow : ''}</tbody>
+        <thead><tr><th>Matière</th><th>Coef</th><th>Dev. 1</th><th>Dev. 2</th><th>Moy. dev.</th><th>Comp.</th><th>Moy.</th><th>Moy. classe</th><th>Pts</th><th>Signature</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="10">Aucune note pour ce trimestre.</td></tr>'}${totauxHTML}</tbody>
       </table>
 
-      <div class="bulletin-subhead">Sous-moyennes par catégorie</div>
-      <div class="stat-row">${sousMoyChips}</div>
-
-      ${disciplineBlock}
-
-      <div class="bulletin-subhead">Résultat du trimestre</div>
-      <div class="stat-row">${rangChips}</div>
-
-      ${historique}
-      ${blocAnnuel}
+      <table class="bulletin-recap">
+        <thead><tr><th>Trimestre</th><th>Moyenne</th><th>Rang</th><th>Appréciation</th></tr></thead>
+        <tbody>${recapRows}</tbody>
+      </table>
+      ${decisionFinale ? `<div class="bulletin-decision">Décision du conseil de classe : <strong>${esc(decisionFinale)}</strong></div>` : ''}
 
       <table class="signature-table">
         <tr>
@@ -5824,7 +6020,7 @@ function attachHandlers(){
     function renderBulletinPreview(eleveId){
       const trimestre = document.getElementById('bulletin-trimestre').value;
       const isLastTrim = PARAMS.trimestres.indexOf(trimestre) === PARAMS.trimestres.length-1;
-      const html = buildBulletinHTML(eleveId, trimestre);
+      const html = fitBulletinHTML(buildBulletinHTML(eleveId, trimestre));
       const elCourant = ELEVES.find(x=>x.id===eleveId);
       const moyAn = isLastTrim ? moyenneAnnuelle(eleveId) : null;
       const suggestion = isLastTrim ? decisionSuggeree(moyAn, estClasseExamen(elCourant?.classe), elCourant) : null;
@@ -6607,6 +6803,7 @@ function attachHandlers(){
       PARAMS.directeurTitre = f.get('directeurTitre')||'Directeur';
       PARAMS.directeurNom = f.get('directeurNom')||'';
       PARAMS.directeurTelephone = f.get('directeurTelephone')||'';
+      PARAMS.etablissementDevise = f.get('etablissementDevise')||'';
       await saveParams(); showToast('Paramètres enregistrés'); render();
     });
 
@@ -6775,6 +6972,30 @@ function attachHandlers(){
         if(!m) return;
         const field = inp.dataset.field;
         m[field] = field==='seuilMoyenne' ? (Number(inp.value)||0) : inp.value.trim();
+        await saveParams();
+      });
+    });
+
+    document.getElementById('form-ajout-appreciation')?.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const label = (f.get('label')||'').trim();
+      if(!label) return;
+      PARAMS.appreciationsBulletin.push({ id: uid(), label, seuil: Number(f.get('seuil'))||0 });
+      await saveParams(); render();
+    });
+    document.querySelectorAll('[data-action="del-appreciation"]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        PARAMS.appreciationsBulletin = PARAMS.appreciationsBulletin.filter(a=>a.id!==btn.dataset.appreciationId);
+        await saveParams(); render();
+      });
+    });
+    document.querySelectorAll('[data-field][data-appreciation-id]').forEach(inp=>{
+      inp.addEventListener('change', async ()=>{
+        const a = PARAMS.appreciationsBulletin.find(a=>a.id===inp.dataset.appreciationId);
+        if(!a) return;
+        const field = inp.dataset.field;
+        a[field] = field==='seuil' ? (Number(inp.value)||0) : inp.value.trim();
         await saveParams();
       });
     });
