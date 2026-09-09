@@ -240,9 +240,9 @@
   .table-emploi select{font-size:10.5px;padding:2px;}
   .table-emploi tr.ligne-pause{background:#fafaf8;}
   .table-emploi td.case-devoir, .table-emploi-print td.case-devoir{background:#eef4ff;}
-  .table-emploi-print{font-size:9.5px;}
-  .table-emploi-print td, .table-emploi-print th{padding:5px 4px;text-align:center;}
-  .table-emploi-print .col-creneau{white-space:nowrap;text-align:left;}
+  .table-emploi-print{font-size:9.5px;table-layout:fixed;}
+  .table-emploi-print td, .table-emploi-print th{padding:5px 4px;text-align:center;overflow:hidden;word-break:break-word;}
+  .table-emploi-print .col-creneau{text-align:left;}
   .doc-pays{font-family:var(--serif);font-weight:700;font-size:12px;letter-spacing:.04em;color:var(--navy);}
   .doc-devise{font-size:9.5px;font-style:italic;color:var(--ink-soft);}
   .doc-ministere{font-size:9px;text-transform:uppercase;letter-spacing:.02em;color:var(--ink-soft);}
@@ -267,7 +267,9 @@
   .receipt-table td, .receipt-table th{border:1px solid #ccc;padding:8px 10px;font-size:13px;text-align:left;}
   .receipt-table tr.highlight td{background:var(--gold-soft);font-weight:700;}
   .fiche-paie-table{table-layout:fixed;}
-  .fiche-paie-table td.fiche-info-label{font-weight:700;background:#f4f2ec;white-space:nowrap;width:14%;}
+  .fiche-paie-table th, .fiche-paie-table td{font-size:9.5px;padding:5px 4px;text-align:center;line-height:1.3;word-break:break-word;}
+  .fiche-paie-table thead th{font-size:9px;font-weight:700;}
+  .fiche-paie-table td.fiche-info-label{font-weight:700;background:#f4f2ec;text-align:left;padding-left:6px;}
   .fiche-paie-table td.fiche-signature-cell{height:2.6em;}
   .moyenne-final{font-family:var(--serif);font-size:16px;font-weight:700;color:var(--navy);text-align:right;}
   .signature{margin-top:50px;text-align:right;font-size:12px;color:#555;border-top:1px solid #999;display:inline-block;float:right;padding-top:6px;}
@@ -1340,15 +1342,20 @@ async function confirmerAvecCode(message){
   }
   const saisie = await demanderSaisie((message || 'Confirmez la suppression') + ' — Entrez le code de suppression :', {password:true});
   if(saisie === null) return false;
-  const hash = await hacherMotDePasse(saisie, PARAMS.codeSuppressionSel);
-  if(hash !== PARAMS.codeSuppressionHash){
+  const ok = await verifierHachage(saisie, PARAMS.codeSuppressionSel, PARAMS.codeSuppressionHash);
+  if(!ok){
     alert('Code incorrect. Suppression annulée.');
     return false;
+  }
+  if(!PARAMS.codeSuppressionHash.startsWith('v2$')){
+    PARAMS.codeSuppressionHash = await hacherMotDePasse(saisie, PARAMS.codeSuppressionSel);
+    await saveParams();
   }
   return true;
 }
 
-// En-tête réutilisé sur tous les documents imprimés (pays, devise, ministère, logo, établissement)
+// En-tête réutilisé sur tous les documents imprimés (pays, devise, ministère, logo, établissement),
+// suivi de la ligne devise de l'établissement / année scolaire — commune à tous les documents.
 function printHeader(){
   const schoolName = esc(document.getElementById('school-name').value);
   const logo = LOGO_DATA_URL ? `<img class="doc-logo" src="${LOGO_DATA_URL}" alt="Logo">` : '';
@@ -1360,7 +1367,8 @@ function printHeader(){
         <div class="doc-pays">${esc(PARAMS.paysNom)}</div>
         <div class="doc-devise">${esc(PARAMS.devise)}</div>
       </div>
-    </div>`;
+    </div>
+    ${buildTopline([PARAMS.etablissementDevise], ['Année scolaire : '+anneeLibelle(anneeAffichageCourante())])}`;
 }
 
 // Ligne libre au-dessus de l'en-tête officiel (doc-officiel), séparée de celui-ci pour ne
@@ -1740,7 +1748,13 @@ function attribuerRangsExAequo(resultats){
   resultats.forEach(r=>{ r.exAequo = compte[r.rang] > 1; });
 }
 
+// Cache actif uniquement pendant une génération groupée de bulletins (voir buildClasseBulletinsHTML)
+// pour éviter de recalculer tout le classement de la classe à chaque élève — gain sensible sur les
+// grandes classes (60-100 élèves), sans risque d'incohérence puisqu'il est vidé juste après.
+let _classementCacheActif = null;
 function classementClasse(classe, trimestre){
+  const cle = classe+'|'+trimestre;
+  if(_classementCacheActif && _classementCacheActif.has(cle)) return _classementCacheActif.get(cle);
   const elevesClasse = ELEVES.filter(e=>e.classe===classe);
   const resultats = elevesClasse.map(e=>{
     const moy = trimestre==='ANNEE' ? moyenneAnnuelle(e.id) : computeTrimestre(e.id, trimestre).moyenneGenerale;
@@ -1749,13 +1763,15 @@ function classementClasse(classe, trimestre){
   resultats.sort((a,b)=>b.moyenne-a.moyenne);
   attribuerRangsExAequo(resultats);
   const moyennes = resultats.map(r=>r.moyenne);
-  return {
+  const resultat = {
     classement: resultats,
     moyenneClasse: moyennes.length ? moyennes.reduce((a,b)=>a+b,0)/moyennes.length : null,
     forte: moyennes.length ? Math.max(...moyennes) : null,
     faible: moyennes.length ? Math.min(...moyennes) : null,
     effectif: resultats.length
   };
+  if(_classementCacheActif) _classementCacheActif.set(cle, resultat);
+  return resultat;
 }
 // Classement des élèves d'une classe pour UNE matière et un trimestre donnés (rang par matière,
 // distinct du rang général trimestriel). Sert à la fiche de vérification par matière.
@@ -1828,9 +1844,11 @@ function classementExamenBlanc(classe, examenBlancId){
 
 // Détecte si une classe est une classe d'examen (3ème ou Terminale), quelle
 // que soit sa graphie exacte (ex: "3ème B", "Term. C", "Tle").
+// Détecte une classe de 3e (recherche du chiffre 3 isolé, suivi de "e"/"è", pour éviter les faux
+// positifs sur des noms de classe contenant un 3 sans rapport, ex. "Groupe 3" ou "6ème B3").
 function estClasseExamen(nomClasse){
   const n = (nomClasse||'').toLowerCase();
-  return n.includes('3') || n.includes('term') || n.includes('tle');
+  return /(?<![0-9])3(?![0-9])\s*[eè]/.test(n) || n.includes('term') || n.includes('tle');
 }
 
 // Distingue le niveau précis (3e ou Terminale) d'une classe d'examen, car les
@@ -1838,7 +1856,7 @@ function estClasseExamen(nomClasse){
 function niveauExamenBlanc(nomClasse){
   const n = (nomClasse||'').toLowerCase();
   if(n.includes('term') || n.includes('tle')) return 'terminale';
-  if(n.includes('3')) return '3e';
+  if(/(?<![0-9])3(?![0-9])\s*[eè]/.test(n)) return '3e';
   return null;
 }
 
@@ -1942,49 +1960,58 @@ function libellesMoisDepuis(moisDebut, n){
 }
 
 // Fiche de paie annuelle d'un membre du personnel : une colonne "Information" (matricule, statut,
-// salaire brut, taxes, net à payer, signature) puis une colonne par mois de paie. Seules les
-// informations déjà connues et stables sur l'année (matricule, statut, salaire brut des postes
-// fixes ou des enseignants Permanents) sont pré-remplies ; taxes, net à payer et signature restent
-// vides, à renseigner et signer chaque mois par l'intéressé(e) avant de percevoir son salaire.
+// salaire brut, taxes, net à payer, signature) puis une colonne par mois de paie. Pour le personnel
+// à salaire stable sur l'année (postes non-enseignants à salaire fixe, enseignants Permanents), tout
+// est pré-rempli — matricule, statut, brut, taxes, net — puisque ce salaire ne varie pas d'un mois à
+// l'autre ; seule la signature reste à apposer chaque mois. Pour les enseignants Vacataires (salaire
+// dépendant des heures assurées dans le mois, donc inconnu à l'avance), seuls matricule et statut
+// sont pré-remplis ; brut, taxes, net et signature restent à renseigner et signer chaque mois.
 function buildFichePaieAnnuelleHTML(personnelId){
   const p = PERSONNEL.find(x=>x.id===personnelId);
   if(!p) return '<p>Membre du personnel introuvable.</p>';
   const n = Number(p.nbMoisPaie)||0;
-  const moisDebut = PARAMS.paie.moisDebutFiches;
+  const moisDebut = p.moisDebutPaie || PARAMS.paie.moisDebutFiches;
   if(!moisDebut || n<=0){
-    return `<div class="bulletin">${printHeader()}<h3>Fiche de paie annuelle</h3><p class="muted">Renseignez le mois de départ des fiches ci-dessus, ainsi que le nombre de mois de paie de ${esc(p.nom)} ${esc(p.prenom)} (onglet Personnel), avant de générer sa fiche.</p></div>`;
+    return `<div class="bulletin fiche-paie">${printHeader()}<h3>Fiche de paie annuelle</h3><p class="muted">Renseignez le mois de départ des fiches ci-dessus, ainsi que le nombre de mois de paie de ${esc(p.nom)} ${esc(p.prenom)} (onglet Personnel), avant de générer sa fiche.</p></div>`;
   }
   const libelles = libellesMoisDepuis(moisDebut, n);
-  let brutConnu = null;
+  let salaireConnu = null; // {brut, taxe, net} si le salaire mensuel est fixe et déjà connu, sinon null
   if(p.fonction!=='Enseignant'){
-    brutConnu = Number(p.salaireFixe)||0;
+    salaireConnu = calculSalaire({type:'Fixe', montantFixe:p.salaireFixe});
   } else if(p.typePersonnel==='Permanent'){
-    brutConnu = calculSalaire({type:'Permanence', niveau:p.niveauEnseignement, heures:p.heuresSemaine}).brut;
+    salaireConnu = calculSalaire({type:'Permanence', niveau:p.niveauEnseignement, heures:p.heuresSemaine});
   }
   const statutLabel = p.fonction==='Enseignant' ? (p.typePersonnel||'—') : 'Permanent';
   const infoRows = [
     { label:'Matricule', cell: ()=> esc(p.matricule)||'—' },
     { label:'Statut', cell: ()=> esc(statutLabel) },
-    { label:'Salaire brut', cell: ()=> brutConnu!==null ? fmt(brutConnu) : '' },
-    { label:'Taxes', cell: ()=> '' },
-    { label:'Net à payer', cell: ()=> '' },
+    { label:'Salaire brut', cell: ()=> salaireConnu ? fmt(salaireConnu.brut) : '' },
+    { label:'Taxes', cell: ()=> salaireConnu ? fmt(salaireConnu.taxe) : '' },
+    { label:'Net à payer', cell: ()=> salaireConnu ? fmt(salaireConnu.net) : '' },
     { label:'Signature', cls:' class="fiche-signature-cell"', cell: ()=> '' }
   ];
   const theadCols = libelles.map(l=>`<th>${esc(l)}</th>`).join('');
   const bodyRows = infoRows.map(r=>`
     <tr><td class="fiche-info-label">${esc(r.label)}</td>${libelles.map(()=>`<td${r.cls||''}>${r.cell()}</td>`).join('')}</tr>
   `).join('');
+  // Colonne "Information" légèrement plus large que les colonnes des mois (largeur fixe et
+  // explicite via <colgroup>, plus fiable sur toutes les imprimantes qu'une largeur déduite du
+  // contenu de la première ligne — évite tout chevauchement de texte entre colonnes).
+  const largeurInfo = 13;
+  const largeurMois = libelles.length ? (100-largeurInfo)/libelles.length : 0;
+  const colgroup = `<colgroup><col style="width:${largeurInfo}%;">${libelles.map(()=>`<col style="width:${largeurMois.toFixed(2)}%;">`).join('')}</colgroup>`;
   return `
     <div class="bulletin fiche-paie">
       ${printHeader()}
-      ${buildTopline(['Fiche de paie annuelle'], ['Année scolaire : '+anneeLibelle(anneeAffichageCourante())])}
+      ${buildTopline(['Fiche de paie annuelle'], [])}
       <h3>Fiche de suivi mensuel de la rémunération</h3>
       <div class="bulletin-identite">
         <span><span class="id-nom">${esc(p.nom)} ${esc(p.prenom)}</span> &nbsp;·&nbsp; ${esc(p.fonction)}${p.matiere?' — '+esc(p.matiere):''}</span>
       </div>
-      <p class="desc" style="margin:6px 0 12px;">À compléter et signer chaque mois par l'intéressé(e) avant perception du salaire.</p>
+      <p class="desc" style="margin:6px 0 12px;">${salaireConnu ? "Salaire mensuel fixe pré-rempli pour toute l'année — seule la signature est à apposer chaque mois avant perception du salaire." : "Salaire variable selon les heures du mois : à compléter et signer chaque mois par l'intéressé(e) avant perception du salaire."}</p>
       <div class="table-wrap">
         <table class="receipt-table fiche-paie-table">
+          ${colgroup}
           <thead><tr><th>Information</th>${theadCols}</tr></thead>
           <tbody>${bodyRows}</tbody>
         </table>
@@ -1993,9 +2020,13 @@ function buildFichePaieAnnuelleHTML(personnelId){
   `;
 }
 
-// Toutes les fiches du personnel actif, à imprimer en une fois (une page par personne).
-function buildFichesPaieAnnuellesHTML(){
-  const actifs = PERSONNEL.filter(p=>p.statut==='Actif').slice().sort((a,b)=>a.nom.localeCompare(b.nom));
+// Toutes les fiches du personnel actif, à imprimer en une fois (une page par personne). Si une
+// liste d'identifiants est fournie, seules ces personnes sont incluses (utilisé pour exclure celles
+// sans mois de paie renseigné, voir le bouton de génération groupée).
+function buildFichesPaieAnnuellesHTML(idsInclus){
+  let actifs = PERSONNEL.filter(p=>p.statut==='Actif');
+  if(idsInclus) actifs = actifs.filter(p=>idsInclus.includes(p.id));
+  actifs = actifs.slice().sort((a,b)=>a.nom.localeCompare(b.nom));
   return actifs.map((p,i)=> `<div style="${i<actifs.length-1?'page-break-after:always;':''}">${buildFichePaieAnnuelleHTML(p.id)}</div>`).join('');
 }
 
@@ -3160,9 +3191,10 @@ function renderPersonnel(){
       <div class="field" id="new-personnel-salaire-field"><label>Salaire fixe mensuel (FCFA)</label><input name="salaireFixe" type="number" min="0" placeholder="Non-enseignant uniquement"></div>
       <div class="field"><label>Statut</label><select name="statut"><option>Actif</option><option>Congé</option><option>Parti</option></select></div>
       <div class="field"><label>Nombre de mois de paie (année)</label><input name="nbMoisPaie" type="number" min="1" max="12" placeholder="ex: 10"></div>
+      <div class="field"><label>Mois de départ (si différent du début d'année)</label><input name="moisDebutPaie" type="month" placeholder="Laisser vide si début normal"></div>
       <button class="btn" type="submit">Ajouter</button>
     </form>
-    <p class="muted" style="margin-top:8px;">Enseignant Permanent : salaire mensuel calculé automatiquement selon les heures assurées par semaine et le niveau (barème dans Paramètres). Enseignant Vacataire : les heures du mois sont saisies directement dans Finances → Salaires. Le salaire fixe ne s'applique qu'au personnel non-enseignant. Le nombre de mois de paie sert à générer la fiche de paie annuelle à signer (onglet Documents), afin qu'elle s'arrête exactement au dernier mois d'activité de la personne.</p>
+    <p class="muted" style="margin-top:8px;">Enseignant Permanent : salaire mensuel calculé automatiquement selon les heures assurées par semaine et le niveau (barème dans Paramètres). Enseignant Vacataire : les heures du mois sont saisies directement dans Finances → Salaires. Le salaire fixe ne s'applique qu'au personnel non-enseignant. Le nombre de mois de paie sert à générer la fiche de paie annuelle à signer (onglet Documents), afin qu'elle s'arrête exactement au dernier mois d'activité de la personne. Le mois de départ individuel ne sert que pour une personne recrutée en cours d'année : laissez-le vide pour utiliser le mois de départ commun réglé dans Documents → Fiche de paie annuelle.</p>
   </div>
 
   ${Object.entries(parFonction).filter(([f,list])=>list.length>0 || true).map(([fonction, liste])=> renderPersonnelCategoriePanel(fonction, liste)).join('')}
@@ -3252,7 +3284,7 @@ function renderDocuments(){
   if(!classesNoms.includes(docClasseFilter)) docClasseFilter = '';
   let elevesTries = ELEVES.slice().sort((a,b)=> (a.classe.localeCompare(b.classe)) || a.nom.localeCompare(b.nom));
   if(cible==='eleve' && docClasseFilter) elevesTries = elevesTries.filter(e=>e.classe===docClasseFilter);
-  const personnelTries = PERSONNEL.slice().sort((a,b)=> a.nom.localeCompare(b.nom));
+  const personnelTries = (docTypeTab==='fichepaie' ? PERSONNEL.filter(p=>p.statut==='Actif') : PERSONNEL.slice()).sort((a,b)=> a.nom.localeCompare(b.nom));
   const elevesOptions = elevesTries.map(e=>`<option value="${e.id}">${esc(e.nom)} ${esc(e.prenom)} — ${esc(e.classe)}</option>`).join('');
   const personnelOptions = personnelTries.map(p=>`<option value="${p.id}">${esc(p.nom)} ${esc(p.prenom)} — ${esc(p.fonction)}</option>`).join('');
   const trimestreOptions = PARAMS.trimestres.map(t=>`<option>${esc(t)}</option>`).join('');
@@ -4078,9 +4110,9 @@ function renderPersonnelCategoriePanel(fonction, liste){
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Nom</th><th>Prénom</th><th>Matricule</th>${estEnseignantCat ? '<th>Matière</th><th>Type</th><th>Détail</th>' : '<th>Salaire fixe</th>'}<th>Contact</th><th>Statut</th><th>Mois de paie</th><th></th></tr></thead>
+        <thead><tr><th>Nom</th><th>Prénom</th><th>Matricule</th>${estEnseignantCat ? '<th>Matière</th><th>Type</th><th>Détail</th>' : '<th>Salaire fixe</th>'}<th>Contact</th><th>Statut</th><th>Mois de paie</th><th>Début paie (si différent)</th><th></th></tr></thead>
         <tbody>
-        ${liste.length===0 ? `<tr class="empty-row"><td colspan="${estEnseignantCat?9:8}">Aucun membre dans cette catégorie.</td></tr>` :
+        ${liste.length===0 ? `<tr class="empty-row"><td colspan="${estEnseignantCat?10:9}">Aucun membre dans cette catégorie.</td></tr>` :
           liste.map(p=>{
             const cls = p.statut==='Actif'?'actif':(p.statut==='Congé'?'conge':'inactif');
             let colsSpecifiques;
@@ -4095,6 +4127,7 @@ function renderPersonnelCategoriePanel(fonction, liste){
               ${colsSpecifiques}<td>${esc(p.contact)||'—'}</td>
               <td><span class="badge ${cls}">${esc(p.statut)}</span>${estEnCongeAujourdhui(p.id) && p.statut!=='Congé' ? ' <span class="badge conge">En congé</span>' : ''}</td>
               <td><input type="number" min="0" max="12" class="inline-num" style="width:60px;" data-action="edit-nb-mois-paie" data-id="${p.id}" value="${Number(p.nbMoisPaie||0)}"></td>
+              <td><input type="month" class="inline-num" style="width:130px;" data-action="edit-mois-debut-paie" data-id="${p.id}" value="${esc(p.moisDebutPaie)||''}"></td>
               <td><button class="btn danger small" data-action="del-personnel" data-id="${p.id}">Supprimer</button></td></tr>`;
           }).join('')}
         </tbody>
@@ -4538,10 +4571,11 @@ function buildEmploiDuTempsHTML(classe){
     return `<tr><td class="col-creneau">${esc(creneau)}</td>${cells}</tr>`;
   }).join('');
   return `
-    <div class="bulletin" style="max-width:760px;">
+    <div class="bulletin emploi-temps-print">
       ${printHeader()}
       <h3>Emploi du temps — ${esc(classe)}</h3>
       <table class="receipt-table table-emploi-print">
+        <colgroup><col style="width:12%;">${jours.map(()=>`<col style="width:${(88/jours.length).toFixed(2)}%;">`).join('')}</colgroup>
         <thead><tr><th class="col-creneau">Horaire</th>${jours.map(j=>`<th>${esc(j)}</th>`).join('')}</tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -5211,12 +5245,12 @@ function fitBulletinHTML(html){
 
 function openPrint(html){
   html = fitBulletinHTML(html);
-  // Les fiches de paie annuelles (nombreuses colonnes mensuelles) tiennent bien mieux en
-  // paysage ; tous les autres documents restent en portrait (format A4 standard). Le format
-  // de page (@page) est global à toute l'impression, donc basculé dynamiquement selon le
-  // contenu à imprimer plutôt que fixé une fois pour toutes.
+  // Les fiches de paie annuelles (nombreuses colonnes mensuelles) et les emplois du temps
+  // (une colonne par jour) tiennent bien mieux en paysage ; tous les autres documents restent
+  // en portrait (format A4 standard). Le format de page (@page) est global à toute l'impression,
+  // donc basculé dynamiquement selon le contenu à imprimer plutôt que fixé une fois pour toutes.
   const orientStyle = document.getElementById('print-orientation-override');
-  if(orientStyle) orientStyle.textContent = html.includes('fiche-paie')
+  if(orientStyle) orientStyle.textContent = (html.includes('fiche-paie') || html.includes('emploi-temps-print'))
     ? '@media print{ @page{ size:A4 landscape; margin:10mm; } }'
     : '';
   const root = document.getElementById('print-preview-root');
@@ -5499,7 +5533,6 @@ function buildBulletinHTML(eleveId, trimestre){
   return `
     <div class="bulletin bulletin-pleine-page">
       ${printHeader()}
-      ${buildTopline([PARAMS.etablissementDevise], ['Année scolaire : '+anneeLibelle(anneeAffichageCourante())])}
       <h3>Bulletin de notes — ${esc(trimestre)}</h3>
       <div class="bulletin-identite">
         <span><span class="id-nom">${esc(el.nom)} ${esc(el.prenom)}</span> &nbsp;·&nbsp; Classe : ${esc(el.classe)}${redoublant?'<span class="badge-redoublant">Redoublant(e)</span>':''}</span>
@@ -5535,8 +5568,13 @@ function buildBulletinHTML(eleveId, trimestre){
 }
 
 function buildClasseBulletinsHTML(classe, trimestre){
-  const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
-  return eleves.map((e,i)=> `<div style="${i<eleves.length-1?'page-break-after:always;':''}">${buildBulletinHTML(e.id, trimestre)}</div>`).join('');
+  _classementCacheActif = new Map();
+  try {
+    const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
+    return eleves.map((e,i)=> `<div style="${i<eleves.length-1?'page-break-after:always;':''}">${buildBulletinHTML(e.id, trimestre)}</div>`).join('');
+  } finally {
+    _classementCacheActif = null;
+  }
 }
 
 // Fiche de vérification par matière : toutes les notes, la moyenne et le rang (dans la matière)
@@ -6309,7 +6347,8 @@ function attachHandlers(){
         heuresSemaine: (estEnseignant && f.get('typePersonnel')==='Permanent') ? Number(f.get('heuresSemaine'))||0 : 0,
         contact: f.get('contact'), statut: f.get('statut'),
         salaireFixe: !estEnseignant ? Number(f.get('salaireFixe'))||0 : 0,
-        nbMoisPaie: Number(f.get('nbMoisPaie'))||0 });
+        nbMoisPaie: Number(f.get('nbMoisPaie'))||0,
+        moisDebutPaie: f.get('moisDebutPaie')||'' });
       await savePersonnel();
       showToast('Membre ajouté');
       render();
@@ -6349,6 +6388,12 @@ function attachHandlers(){
       input.addEventListener('change', async ()=>{
         const p = PERSONNEL.find(x=>x.id===input.dataset.id);
         if(p){ p.nbMoisPaie = Number(input.value)||0; await savePersonnel(); showToast('Nombre de mois de paie mis à jour'); }
+      });
+    });
+    document.querySelectorAll('[data-action="edit-mois-debut-paie"]').forEach(input=>{
+      input.addEventListener('change', async ()=>{
+        const p = PERSONNEL.find(x=>x.id===input.dataset.id);
+        if(p){ p.moisDebutPaie = input.value||''; await savePersonnel(); showToast('Mois de départ mis à jour'); }
       });
     });
     document.querySelectorAll('[data-action="print-personnel-categorie"]').forEach(btn=>{
@@ -6476,7 +6521,12 @@ function attachHandlers(){
     });
     document.getElementById('btn-generer-fiches-paie-toutes')?.addEventListener('click', ()=>{
       if(!PARAMS.paie.moisDebutFiches){ showToast("Renseignez d'abord le mois de départ des fiches."); return; }
-      openPrint(buildFichesPaieAnnuellesHTML());
+      const actifs = PERSONNEL.filter(p=>p.statut==='Actif');
+      const prets = actifs.filter(p=> (Number(p.nbMoisPaie)||0) > 0 && (p.moisDebutPaie || PARAMS.paie.moisDebutFiches));
+      const ignores = actifs.length - prets.length;
+      if(prets.length===0){ showToast("Aucune personne active n'a de nombre de mois de paie renseigné (onglet Personnel)."); return; }
+      if(ignores>0 && !confirm(`${ignores} personne(s) active(s) sans nombre de mois de paie renseigné seront ignorée(s) (onglet Personnel → colonne « Mois de paie »).\n\nGénérer quand même les ${prets.length} fiche(s) restante(s) ?`)) return;
+      openPrint(buildFichesPaieAnnuellesHTML(prets.map(p=>p.id)));
     });
     document.getElementById('btn-generer-cartes-classe')?.addEventListener('click', ()=>{
       const classe = document.getElementById('doc-carte-classe-select')?.value;
@@ -6762,8 +6812,13 @@ function attachHandlers(){
     document.getElementById('form-deverrouiller')?.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const f = new FormData(e.target);
-      const hash = await hacherMotDePasse(f.get('pin')||'', PARAMS.pinVerrouillageSel);
-      if(hash === PARAMS.pinVerrouillageHash){
+      const pin = f.get('pin')||'';
+      const ok = await verifierHachage(pin, PARAMS.pinVerrouillageSel, PARAMS.pinVerrouillageHash);
+      if(ok){
+        if(!PARAMS.pinVerrouillageHash.startsWith('v2$')){
+          PARAMS.pinVerrouillageHash = await hacherMotDePasse(pin, PARAMS.pinVerrouillageSel);
+          await saveParams();
+        }
         parametresDeverrouille = true;
         render();
       } else {
@@ -7352,9 +7407,28 @@ const ROLES = {
 let UTILISATEURS = []; // [{ id, nom, identifiant, role, sel, hash }]
 let UTILISATEUR_COURANT = null;
 
-async function hacherMotDePasse(motDePasse, sel){
+async function hacherSha256Simple(motDePasse, sel){
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sel+'::'+motDePasse));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+const HACHAGE_ITERATIONS = 100000;
+// Hachage renforcé (préfixe "v2$") : 100 000 tours de SHA-256 au lieu d'un seul tour. Rend une
+// attaque hors-ligne par force brute nettement plus coûteuse si un fichier de sauvegarde exporté
+// (qui contient ces hachages — voir exportBackup) venait à être exposé. Utilisé pour toute
+// création ou modification de mot de passe / code PIN / code de suppression.
+async function hacherMotDePasse(motDePasse, sel){
+  let buf = new TextEncoder().encode(sel+'::'+motDePasse);
+  for(let i=0;i<HACHAGE_ITERATIONS;i++){ buf = await crypto.subtle.digest('SHA-256', buf); }
+  return 'v2$'+Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+// Vérifie une saisie contre un hachage stocké, quel qu'en soit le format : le nouveau format
+// renforcé ("v2$...") ou l'ancien format à un seul tour de SHA-256 utilisé par les versions
+// antérieures — jamais rejeté pour ne pas bloquer les comptes/codes déjà configurés avant cette
+// mise à jour (voir les appelants pour la mise à niveau automatique du hachage après vérification).
+async function verifierHachage(motDePasse, sel, hashAttendu){
+  if(!hashAttendu) return false;
+  if(hashAttendu.startsWith('v2$')) return (await hacherMotDePasse(motDePasse, sel)) === hashAttendu;
+  return (await hacherSha256Simple(motDePasse, sel)) === hashAttendu;
 }
 const saveUtilisateurs = () => save('utilisateurs-data', UTILISATEURS);
 
@@ -7430,8 +7504,12 @@ async function verifierConnexionEtDemarrer(){
     const motDePasse = f.get('motDePasse');
     const u = UTILISATEURS.find(x=>x.id===userId);
     if(!u) return;
-    const hash = await hacherMotDePasse(motDePasse, u.sel);
-    if(hash === u.hash){
+    const ok = await verifierHachage(motDePasse, u.sel, u.hash);
+    if(ok){
+      if(!u.hash.startsWith('v2$')){
+        u.hash = await hacherMotDePasse(motDePasse, u.sel);
+        await saveUtilisateurs();
+      }
       sessionStorage.setItem('utilisateur-session-id', u.id);
       UTILISATEUR_COURANT = u;
       overlay.style.display = 'none';
