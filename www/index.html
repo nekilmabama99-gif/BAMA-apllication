@@ -228,12 +228,17 @@
   /* Print area (hidden on screen) */
   #print-area{display:none;}
   .receipt, .bulletin{font-family:var(--sans);color:#111;max-width:560px;margin:0 auto;}
+  /* Documents imprimés en paysage (fiche de paie annuelle, emploi du temps) : la largeur
+     A4 portrait (560px) hérite de .bulletin mais est trop étroite en paysage, laissant le
+     contenu coincé au centre de la feuille. On élargit pour occuper toute la largeur utile. */
+  .bulletin.fiche-paie, .bulletin.emploi-temps-print{max-width:100%;width:100%;}
   .receipt h2, .bulletin h2{font-family:var(--serif);color:var(--navy);margin:0 0 1px 0;font-size:16px;text-align:center;}
   .doc-logo{display:block;max-width:70px;max-height:70px;margin:0 auto 4px auto;object-fit:contain;}
   .doc-officiel{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:6px 8px;margin-bottom:8px;line-height:1.4;}
   .doc-col-gauche{flex:1 1 160px;text-align:left;min-width:0;overflow-wrap:break-word;}
   .doc-col-centre{flex:0 1 auto;text-align:center;max-width:38%;min-width:0;overflow-wrap:break-word;}
   .doc-col-centre h2{margin:0;overflow-wrap:break-word;}
+  .doc-etab-tel{font-size:9.5px;color:var(--ink-soft);margin-top:1px;}
   .doc-col-droite{flex:1 1 160px;text-align:right;min-width:0;overflow-wrap:break-word;}
   .table-emploi td, .table-emploi th{font-size:11px;padding:4px 5px;text-align:center;}
   .table-emploi .col-creneau{white-space:nowrap;font-size:10px;text-align:left;background:#fafaf8;}
@@ -458,6 +463,11 @@
   }
   .code-modal .code-modal-err{color:var(--red); font-size:13px; margin:-8px 0 12px 0; display:none;}
   .code-modal-actions{display:flex; justify-content:flex-end; gap:10px;}
+  /* Variante large : formulaire d'édition complet (fiche élève) plutôt qu'une simple saisie. */
+  .code-modal.code-modal-large{width:640px; max-width:94vw; max-height:88vh; overflow-y:auto;}
+  .code-modal.code-modal-large h3{margin:0 0 14px 0; font-family:var(--serif); color:var(--navy);}
+  .code-modal.code-modal-large .form-grid{margin-bottom:6px;}
+  .code-modal.code-modal-large input, .code-modal.code-modal-large select{margin-bottom:0;}
 
   .print-preview-backdrop{
     position:fixed; inset:0; background:rgba(20,24,30,0.65);
@@ -671,6 +681,7 @@ const DEFAULT_PARAMS = {
   directeurNom: '',
   directeurTelephone: '',
   directeurTitre: 'Directeur', // ex: "Directeur", "Proviseur", "Directrice", "Proviseure"...
+  etablissementTelephone: '', // numéro(s) de l'établissement, affiché sur tous les documents délivrés (bulletins, certificats, reçus...)
   etablissementDevise: '', // devise propre à l'établissement, affichée en haut à gauche du bulletin
   lieuCarteScolaire: '', // lieu de délivrance affiché au verso de la carte scolaire (ex: "Ouagadougou")
   carte: {
@@ -1072,6 +1083,7 @@ async function loadAll(){
   if(PARAMS.directeurNom===undefined) PARAMS.directeurNom = '';
   if(PARAMS.etablissementDevise===undefined) PARAMS.etablissementDevise = '';
   if(PARAMS.directeurTelephone===undefined) PARAMS.directeurTelephone = '';
+  if(PARAMS.etablissementTelephone===undefined) PARAMS.etablissementTelephone = '';
   if(PARAMS.lieuCarteScolaire===undefined) PARAMS.lieuCarteScolaire = '';
   if(PARAMS.directeurTitre===undefined) PARAMS.directeurTitre = 'Directeur';
   PARAMS.carte = Object.assign({}, DEFAULT_PARAMS.carte, PARAMS.carte||{});
@@ -1143,6 +1155,7 @@ async function loadAll(){
   if(PARAMS.devise===undefined) PARAMS.devise = 'La Patrie ou la Mort, Nous Vaincrons';
   if(PARAMS.ministere===undefined) PARAMS.ministere = "MINISTÈRE DE L'ÉDUCATION NATIONALE, DE L'ALPHABÉTISATION ET DE LA PROMOTION DES LANGUES NATIONALES";
   ELEVES.forEach(e => { if(e.aDejaRedouble===undefined) e.aDejaRedouble = false; });
+  ELEVES.forEach(e => { if(e.classeDejaDoublee===undefined) e.classeDejaDoublee = ''; });
 
   // Migration : matières et coefficients indépendants par classe (avant, une seule liste globale).
   // On récupère l'ancienne liste globale comme point de départ pour chaque classe existante.
@@ -1306,7 +1319,80 @@ function demanderSaisie(message, {password=false, placeholder=''} = {}){
   });
 }
 
-// Comme demanderSaisie, mais pour choisir une valeur dans une liste (menu déroulant) plutôt que
+// Ouvre une modale d'édition complète de la fiche d'un élève (identité, naissance, filiation,
+// redoublement...) — champs qui n'étaient auparavant modifiables qu'à l'inscription, obligeant
+// sinon à supprimer puis recréer l'élève pour corriger une simple erreur de saisie.
+function ouvrirModaleEditionEleve(eleveId){
+  return new Promise(resolve=>{
+    const el = ELEVES.find(x=>x.id===eleveId);
+    if(!el) return resolve(false);
+    const root = document.getElementById('code-modal-root');
+    root.innerHTML = `
+      <div class="code-modal-backdrop">
+        <div class="code-modal code-modal-large">
+          <h3>Modifier la fiche de ${esc(el.nom)} ${esc(el.prenom)}</h3>
+          <form id="form-edit-eleve" class="form-grid">
+            <div class="field"><label>Numéro (matricule)</label><input name="matricule" required value="${esc(el.matricule)||''}"></div>
+            <div class="field"><label>Nom</label><input name="nom" required value="${esc(el.nom)||''}"></div>
+            <div class="field"><label>Prénom</label><input name="prenom" required value="${esc(el.prenom)||''}"></div>
+            <div class="field"><label>Sexe</label><select name="sexe"><option value="F" ${el.sexe==='F'?'selected':''}>F</option><option value="M" ${el.sexe==='M'?'selected':''}>M</option></select></div>
+            <div class="field"><label>Date de naissance</label><input name="dateNaissance" type="date" value="${esc(el.dateNaissance)||''}"></div>
+            <div class="field"><label>Lieu de naissance</label><input name="lieuNaissance" value="${esc(el.lieuNaissance)||''}"></div>
+            <div class="field"><label>Nom du père</label><input name="nomPere" value="${esc(el.nomPere)||''}"></div>
+            <div class="field"><label>Nom de la mère</label><input name="nomMere" value="${esc(el.nomMere)||''}"></div>
+            <div class="field"><label>Statut d'affectation</label><select name="statutAffectation"><option ${el.statutAffectation==='Affecté'?'selected':''}>Affecté</option><option ${el.statutAffectation==='Non affecté'?'selected':''}>Non affecté</option></select></div>
+            <div class="field"><label>A déjà redoublé avant son arrivée</label><select name="aDejaRedouble" id="edit-eleve-a-deja-redouble"><option value="" ${!el.aDejaRedouble?'selected':''}>Non</option><option value="1" ${el.aDejaRedouble?'selected':''}>Oui</option></select></div>
+            <div class="field" id="edit-eleve-classe-doublee-wrap" style="display:${el.aDejaRedouble?'':'none'};">
+              <label>Classe déjà doublée</label>
+              <input name="classeDejaDoublee" id="edit-eleve-classe-doublee" placeholder="ex: 6ème" value="${esc(el.classeDejaDoublee)||''}">
+            </div>
+          </form>
+          <p class="code-modal-err" id="edit-eleve-err"></p>
+          <div class="code-modal-actions">
+            <button class="btn secondary small" id="edit-eleve-cancel" type="button">Annuler</button>
+            <button class="btn small" id="edit-eleve-ok" type="button">Enregistrer</button>
+          </div>
+        </div>
+      </div>`;
+    const form = document.getElementById('form-edit-eleve');
+    const errEl = document.getElementById('edit-eleve-err');
+    const cleanup = (val)=>{ root.innerHTML=''; resolve(val); };
+    document.getElementById('edit-eleve-cancel').addEventListener('click', ()=>cleanup(false));
+    document.getElementById('edit-eleve-a-deja-redouble').addEventListener('change', (e)=>{
+      document.getElementById('edit-eleve-classe-doublee-wrap').style.display = e.target.value==='1' ? '' : 'none';
+    });
+    document.getElementById('edit-eleve-ok').addEventListener('click', async ()=>{
+      const f = new FormData(form);
+      const matricule = (f.get('matricule')||'').trim();
+      const nom = (f.get('nom')||'').trim();
+      const prenom = (f.get('prenom')||'').trim();
+      if(!matricule || !nom || !prenom){
+        errEl.textContent = 'Matricule, nom et prénom sont obligatoires.';
+        errEl.style.display = 'block';
+        return;
+      }
+      const doublonMatricule = ELEVES.find(x=>x.id!==el.id && x.matricule && x.matricule.trim().toLowerCase()===matricule.toLowerCase());
+      if(doublonMatricule){
+        errEl.textContent = `Le matricule « ${matricule} » est déjà attribué à ${doublonMatricule.nom} ${doublonMatricule.prenom} (classe ${doublonMatricule.classe}).`;
+        errEl.style.display = 'block';
+        return;
+      }
+      el.matricule = matricule; el.nom = nom; el.prenom = prenom;
+      el.sexe = f.get('sexe')||'';
+      el.dateNaissance = f.get('dateNaissance')||'';
+      el.lieuNaissance = (f.get('lieuNaissance')||'').trim();
+      el.nomPere = (f.get('nomPere')||'').trim();
+      el.nomMere = (f.get('nomMere')||'').trim();
+      el.statutAffectation = f.get('statutAffectation')||'Non affecté';
+      el.aDejaRedouble = f.get('aDejaRedouble')==='1';
+      el.classeDejaDoublee = el.aDejaRedouble ? (f.get('classeDejaDoublee')||'').trim() : '';
+      await saveEleves();
+      cleanup(true);
+    });
+  });
+}
+
+
 // taper du texte libre. Retourne la valeur choisie, ou null si annulé.
 function demanderChoix(message, options){
   return new Promise(resolve=>{
@@ -1362,7 +1448,7 @@ function printHeader(){
   return `
     <div class="doc-officiel">
       <div class="doc-col-gauche doc-ministere">${esc(PARAMS.ministere)}</div>
-      <div class="doc-col-centre">${logo}<h2>${schoolName}</h2></div>
+      <div class="doc-col-centre">${logo}<h2>${schoolName}</h2>${PARAMS.etablissementTelephone?`<div class="doc-etab-tel">Tél. : ${esc(PARAMS.etablissementTelephone)}</div>`:''}</div>
       <div class="doc-col-droite">
         <div class="doc-pays">${esc(PARAMS.paysNom)}</div>
         <div class="doc-devise">${esc(PARAMS.devise)}</div>
@@ -1699,7 +1785,9 @@ function computeTrimestre(eleveId, trimestre){
 // notés dans cette matière) de la moyenne de chacun dans cette matière. Utilisé pour la
 // colonne « Moy. classe » du tableau de notes du bulletin.
 function moyennesClasseParMatiere(classe, trimestre){
-  const eleves = ELEVES.filter(e=>e.classe===classe);
+  // Élèves inactifs (partis en cours d'année) exclus : sinon leurs notes déjà saisies avant
+  // leur départ continuent de peser sur la moyenne de classe de leurs anciens camarades.
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif');
   const sommes = {}; // matiereId -> {total, count}
   eleves.forEach(e=>{
     NOTES.filter(n=>n.eleveId===e.id && n.trimestre===trimestre).forEach(n=>{
@@ -1755,7 +1843,8 @@ let _classementCacheActif = null;
 function classementClasse(classe, trimestre){
   const cle = classe+'|'+trimestre;
   if(_classementCacheActif && _classementCacheActif.has(cle)) return _classementCacheActif.get(cle);
-  const elevesClasse = ELEVES.filter(e=>e.classe===classe);
+  // Élèves inactifs exclus (voir moyennesClasseParMatiere ci-dessus pour la même raison).
+  const elevesClasse = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif');
   const resultats = elevesClasse.map(e=>{
     const moy = trimestre==='ANNEE' ? moyenneAnnuelle(e.id) : computeTrimestre(e.id, trimestre).moyenneGenerale;
     return { eleveId: e.id, moyenne: moy };
@@ -1776,7 +1865,7 @@ function classementClasse(classe, trimestre){
 // Classement des élèves d'une classe pour UNE matière et un trimestre donnés (rang par matière,
 // distinct du rang général trimestriel). Sert à la fiche de vérification par matière.
 function classementParMatiere(classe, matiereId, trimestre){
-  const eleves = ELEVES.filter(e=>e.classe===classe);
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif');
   const resultats = eleves.map(e=>{
     const n = NOTES.find(x=>x.eleveId===e.id && x.matiereId===matiereId && x.trimestre===trimestre);
     const moyenne = n ? moyenneMatiere(n).moyenne : null;
@@ -2556,8 +2645,12 @@ function renderEleves(){
       <div class="field"><label>Année d'enregistrement dans l'établissement</label><input name="anneeEnregistrement" value="${esc(anneeLibelle(anneeActiveId))}" placeholder="ex: 2025-2026"></div>
       <div class="field"><label>Frais annuel (FCFA)</label><input id="new-eleve-frais" name="fraisAnnuel" type="number" min="0"></div>
       <div class="field"><label>Statut</label><select name="statut"><option>Actif</option><option>Inactif</option></select></div>
-      <div class="field"><label>A déjà redoublé avant son arrivée dans l'établissement</label><select name="aDejaRedouble"><option value="">Non</option><option value="1">Oui</option></select>
+      <div class="field"><label>A déjà redoublé avant son arrivée dans l'établissement</label><select name="aDejaRedouble" id="new-eleve-a-deja-redouble"><option value="">Non</option><option value="1">Oui</option></select>
         <p class="muted" style="margin-top:4px;font-size:11.5px;">Un redoublement survenant au sein de l'établissement est désormais détecté et affiché automatiquement sur le bulletin — ce champ ne sert que pour un élève déjà redoublant à son arrivée.</p>
+      </div>
+      <div class="field" id="new-eleve-classe-doublee-wrap" style="display:none;">
+        <label>Classe déjà doublée</label>
+        <input name="classeDejaDoublee" id="new-eleve-classe-doublee" placeholder="ex: 6ème">
       </div>
       <button class="btn" type="submit">Ajouter l'élève</button>
     </form>
@@ -2628,6 +2721,7 @@ function renderClasseElevesPanel(classe, nomFilter){
                 ${e.statutSport==='Dispensé' ? `<input class="inline-num" style="width:120px;margin-top:3px;" data-action="edit-motif-sport" data-id="${e.id}" value="${esc(e.motifDispenseSport)||''}" placeholder="Motif (certif. médical...)">` : ''}
               </td>
               <td style="white-space:nowrap;">
+                <button class="btn secondary small" data-action="modifier-eleve" data-id="${e.id}">Modifier</button>
                 <button class="btn secondary small" data-action="changer-classe-eleve" data-id="${e.id}">Changer de classe</button>
                 <button class="btn danger small" data-action="del-eleve" data-id="${e.id}">Supprimer</button>
               </td>
@@ -4809,10 +4903,11 @@ function renderParametres(){
       <div class="field"><label>Titre du responsable</label><input name="directeurTitre" value="${esc(PARAMS.directeurTitre)}" placeholder="ex: Directeur, Proviseur, Directrice..."></div>
       <div class="field"><label>Nom du responsable</label><input name="directeurNom" value="${esc(PARAMS.directeurNom)}" placeholder="ex: M. Ouédraogo Jean"></div>
       <div class="field"><label>Numéro du responsable</label><input name="directeurTelephone" value="${esc(PARAMS.directeurTelephone)}" placeholder="+226 ..."></div>
+      <div class="field"><label>Numéro(s) de l'établissement</label><input name="etablissementTelephone" value="${esc(PARAMS.etablissementTelephone)}" placeholder="ex: +226 25 00 00 00 / +226 70 00 00 00"></div>
       <div class="field"><label>Devise de l'établissement (bulletin)</label><input name="etablissementDevise" value="${esc(PARAMS.etablissementDevise)}" placeholder="ex: Discipline - Travail - Réussite"></div>
       <button class="btn gold" type="submit">Enregistrer</button>
     </form>
-    <p class="muted" style="margin-top:8px;">Les deux pourcentages doivent totaliser 100 (actuellement : ${Number(PARAMS.ponderationDevoirs)+Number(PARAMS.ponderationComposition)}). Le titre (« Directeur », « Proviseur »...) remplace automatiquement le mot « Directeur » partout où il apparaît sur les documents imprimés.</p>
+    <p class="muted" style="margin-top:8px;">Les deux pourcentages doivent totaliser 100 (actuellement : ${Number(PARAMS.ponderationDevoirs)+Number(PARAMS.ponderationComposition)}). Le titre (« Directeur », « Proviseur »...) remplace automatiquement le mot « Directeur » partout où il apparaît sur les documents imprimés. Le(s) numéro(s) de l'établissement s'affichent en en-tête de tous les documents délivrés (bulletins, certificats, attestations, reçus, convocations...).</p>
   </div>
 
   <div class="panel">
@@ -5448,6 +5543,10 @@ function buildBulletinHTML(eleveId, trimestre){
   // Statut de redoublement déduit automatiquement de l'historique de l'établissement
   // (voir estRedoublantAnneeCourante) — n'a plus besoin d'être saisi à la main.
   const redoublant = estRedoublantAnneeCourante(eleveId);
+  // Classe doublée : si l'élève redouble sa classe actuelle cette année, c'est celle-ci ;
+  // sinon, s'il a déjà redoublé avant son arrivée, on affiche la classe indiquée à son
+  // enregistrement ; à défaut, l'élève n'a jamais redoublé.
+  const classeDoublee = redoublant ? el.classe : (el.aDejaRedouble && el.classeDejaDoublee ? el.classeDejaDoublee : '');
   const moyClasseParMatiere = moyennesClasseParMatiere(el.classe, trimestre);
 
   // Matières groupées par catégorie (ordre : PARAMS.categoriesMatieres) avec, à la fin de
@@ -5537,6 +5636,8 @@ function buildBulletinHTML(eleveId, trimestre){
       <div class="bulletin-identite">
         <span><span class="id-nom">${esc(el.nom)} ${esc(el.prenom)}</span> &nbsp;·&nbsp; Classe : ${esc(el.classe)}${redoublant?'<span class="badge-redoublant">Redoublant(e)</span>':''}</span>
       </div>
+      <div class="bulletin-info-ligne">Né(e) le <strong>${formatDateFrCourt(el.dateNaissance)||'—'}</strong> à <strong>${esc(el.lieuNaissance)||'—'}</strong> &nbsp;·&nbsp; Matricule : <strong>${esc(el.matricule)||'—'}</strong></div>
+      <div class="bulletin-info-ligne">Classe doublée : <strong>${classeDoublee ? esc(classeDoublee) : 'Néant'}</strong></div>
       <div class="bulletin-info-ligne">Effectif de la classe : <strong>${classement.effectif}</strong></div>
       <div class="bulletin-info-ligne">Aptitude sportive : ${data.dispenseSport ? `Dispensé${data.motifSportDispense?' ('+esc(data.motifSportDispense)+')':''}` : 'Apte'}</div>
 
@@ -5809,6 +5910,16 @@ function attachHandlers(){
     document.getElementById('new-eleve-affectation')?.addEventListener('change', majFraisSuggere);
     majFraisSuggere();
 
+    // Le champ « classe déjà doublée » n'a de sens que si l'élève a déjà redoublé avant son
+    // arrivée — masqué par défaut, affiché seulement quand « Oui » est sélectionné.
+    const toggleClasseDoublee = ()=>{
+      const majDejaRedouble = document.getElementById('new-eleve-a-deja-redouble')?.value;
+      const wrap = document.getElementById('new-eleve-classe-doublee-wrap');
+      if(wrap) wrap.style.display = majDejaRedouble==='1' ? '' : 'none';
+    };
+    document.getElementById('new-eleve-a-deja-redouble')?.addEventListener('change', toggleClasseDoublee);
+    toggleClasseDoublee();
+
     document.getElementById('form-eleve')?.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const f = new FormData(e.target);
@@ -5846,7 +5957,7 @@ function attachHandlers(){
         statutSport: f.get('statutSport')||'Apte', motifDispenseSport: '',
         anneeEnregistrement: (f.get('anneeEnregistrement')||'').trim(),
         fraisAnnuel: Number(f.get('fraisAnnuel'))||0, statut: f.get('statut'),
-        aDejaRedouble: f.get('aDejaRedouble')==='1' });
+        aDejaRedouble: f.get('aDejaRedouble')==='1', classeDejaDoublee: f.get('aDejaRedouble')==='1' ? (f.get('classeDejaDoublee')||'').trim() : '' });
       await saveEleves();
       showToast('Élève ajouté');
       render();
@@ -5864,6 +5975,12 @@ function attachHandlers(){
     });
 
     document.getElementById('content').addEventListener('click', async (e)=>{
+      const modifierBtn = e.target.closest('[data-action="modifier-eleve"]');
+      if(modifierBtn){
+        const ok = await ouvrirModaleEditionEleve(modifierBtn.dataset.id);
+        if(ok){ showToast('Fiche élève mise à jour'); render(); }
+        return;
+      }
       const changerClasseBtn = e.target.closest('[data-action="changer-classe-eleve"]');
       if(changerClasseBtn){
         const el = ELEVES.find(x=>x.id===changerClasseBtn.dataset.id);
@@ -6990,6 +7107,7 @@ function attachHandlers(){
       PARAMS.directeurTitre = f.get('directeurTitre')||'Directeur';
       PARAMS.directeurNom = f.get('directeurNom')||'';
       PARAMS.directeurTelephone = f.get('directeurTelephone')||'';
+      PARAMS.etablissementTelephone = f.get('etablissementTelephone')||'';
       PARAMS.etablissementDevise = f.get('etablissementDevise')||'';
       await saveParams(); showToast('Paramètres enregistrés'); render();
     });
