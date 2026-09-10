@@ -1340,6 +1340,11 @@ function ouvrirModaleEditionEleve(eleveId){
             <div class="field"><label>Lieu de naissance</label><input name="lieuNaissance" value="${esc(el.lieuNaissance)||''}"></div>
             <div class="field"><label>Nom du père</label><input name="nomPere" value="${esc(el.nomPere)||''}"></div>
             <div class="field"><label>Nom de la mère</label><input name="nomMere" value="${esc(el.nomMere)||''}"></div>
+            <div class="field"><label>Statut</label><select name="statut" id="edit-eleve-statut"><option value="Actif" ${el.statut!=='Inactif'?'selected':''}>Actif</option><option value="Inactif" ${el.statut==='Inactif'?'selected':''}>Inactif</option></select></div>
+            <div class="field" id="edit-eleve-motif-sortie-wrap" style="display:${el.statut==='Inactif'?'':'none'};">
+              <label>Motif (abandon, départ...)</label>
+              <input name="motifSortie" id="edit-eleve-motif-sortie" placeholder="ex: Abandon en cours d'année" value="${esc(el.motifSortie)||''}">
+            </div>
             <div class="field"><label>Statut d'affectation</label><select name="statutAffectation"><option ${el.statutAffectation==='Affecté'?'selected':''}>Affecté</option><option ${el.statutAffectation==='Non affecté'?'selected':''}>Non affecté</option></select></div>
             <div class="field"><label>A déjà redoublé avant son arrivée</label><select name="aDejaRedouble" id="edit-eleve-a-deja-redouble"><option value="" ${!el.aDejaRedouble?'selected':''}>Non</option><option value="1" ${el.aDejaRedouble?'selected':''}>Oui</option></select></div>
             <div class="field" id="edit-eleve-classe-doublee-wrap" style="display:${el.aDejaRedouble?'':'none'};">
@@ -1360,6 +1365,9 @@ function ouvrirModaleEditionEleve(eleveId){
     document.getElementById('edit-eleve-cancel').addEventListener('click', ()=>cleanup(false));
     document.getElementById('edit-eleve-a-deja-redouble').addEventListener('change', (e)=>{
       document.getElementById('edit-eleve-classe-doublee-wrap').style.display = e.target.value==='1' ? '' : 'none';
+    });
+    document.getElementById('edit-eleve-statut').addEventListener('change', (e)=>{
+      document.getElementById('edit-eleve-motif-sortie-wrap').style.display = e.target.value==='Inactif' ? '' : 'none';
     });
     document.getElementById('edit-eleve-ok').addEventListener('click', async ()=>{
       const f = new FormData(form);
@@ -1384,6 +1392,8 @@ function ouvrirModaleEditionEleve(eleveId){
       el.nomPere = (f.get('nomPere')||'').trim();
       el.nomMere = (f.get('nomMere')||'').trim();
       el.statutAffectation = f.get('statutAffectation')||'Non affecté';
+      el.statut = f.get('statut')==='Inactif' ? 'Inactif' : 'Actif';
+      el.motifSortie = el.statut==='Inactif' ? (f.get('motifSortie')||'').trim() : '';
       el.aDejaRedouble = f.get('aDejaRedouble')==='1';
       el.classeDejaDoublee = el.aDejaRedouble ? (f.get('classeDejaDoublee')||'').trim() : '';
       await saveEleves();
@@ -1916,7 +1926,7 @@ function computeExamenBlanc(eleveId, examenBlancId){
 
 // Classement d'une classe pour un examen blanc donné.
 function classementExamenBlanc(classe, examenBlancId){
-  const elevesClasse = ELEVES.filter(e=>e.classe===classe);
+  const elevesClasse = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif');
   const resultats = elevesClasse.map(e=>{
     const moy = computeExamenBlanc(e.id, examenBlancId).moyenneGenerale;
     return { eleveId: e.id, moyenne: moy };
@@ -2856,7 +2866,7 @@ function renderDisciplinePanel(trimestre, classe){
 }
 
 function renderGrilleSaisie(trimestre, classe, matiereId){
-  const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif').sort((a,b)=>a.nom.localeCompare(b.nom));
   const matiere = matieresPourClasse(classe).find(m=>m.id===matiereId);
   const rows = eleves.map(e=>{
     const n = NOTES.find(x=>x.eleveId===e.id && x.matiereId===matiereId && x.trimestre===trimestre);
@@ -3025,7 +3035,7 @@ function renderExamensBlancs(){
 }
 
 function renderGrilleBlanc(examenBlancId, classe, matiereId){
-  const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif').sort((a,b)=>a.nom.localeCompare(b.nom));
   const matiere = matieresPourClasse(classe).find(m=>m.id===matiereId);
   const rows = eleves.map(e=>{
     const n = NOTES_BLANC.find(x=>x.eleveId===e.id && x.matiereId===matiereId && x.examenBlancId===examenBlancId);
@@ -4250,13 +4260,12 @@ function assiduiteEleveTrimestre(eleveId, trimestre){
 }
 
 // Variante utilisée uniquement pour le calcul des réductions de points (discipline) : une absence
-// JUSTIFIÉE (certificat médical, etc.) n'est pas une faute et ne doit donc pas être pénalisée —
-// contrairement à assiduiteEleveTrimestre ci-dessus, qui sert aux statistiques générales de
-// présence et compte toutes les absences, justifiées ou non. Les retards n'ont pas de statut
-// justifié/non justifié dans le module Absences : ils comptent donc tous, comme avant.
+// ou un retard JUSTIFIÉ (certificat médical, etc.) n'est pas une faute et ne doit donc pas être
+// pénalisé — contrairement à assiduiteEleveTrimestre ci-dessus, qui sert aux statistiques
+// générales de présence et compte toutes les absences/retards, justifiés ou non.
 function assiduiteDisciplinaireTrimestre(eleveId, trimestre){
   const entrees = ABSENCES.filter(a=>a.eleveId===eleveId && trimestrePourDate(a.date)===trimestre);
-  const heuresRetard = entrees.filter(a=>a.type==='retard').reduce((s,a)=>s+(Number(a.heuresRetard)||0), 0);
+  const heuresRetard = entrees.filter(a=>a.type==='retard' && !a.justifiee).reduce((s,a)=>s+(Number(a.heuresRetard)||0), 0);
   const joursAbsence = entrees.filter(a=>a.type!=='retard' && !a.justifiee).length;
   return { heuresRetard, joursAbsence };
 }
@@ -4446,7 +4455,7 @@ function renderAbsences(){
           <option value="retard" ${statut==='retard'?'selected':''}>Retard</option>
         </select>
       </td>
-      <td class="cell-justifiee" style="${statut!=='absent'?'display:none;':''}"><input type="checkbox" class="chk-justifiee" ${abs?.justifiee?'checked':''}></td>
+      <td class="cell-justifiee" style="${statut==='present'?'display:none;':''}"><input type="checkbox" class="chk-justifiee" ${abs?.justifiee?'checked':''}></td>
       <td class="cell-heure" style="${statut!=='retard'?'display:none;':''}"><input type="number" min="0" step="0.25" class="txt-heures-retard" value="${abs?.heuresRetard??''}" placeholder="Nb d'heures"></td>
       <td><input type="text" class="txt-motif" value="${esc(abs?.motif)||''}" placeholder="Motif (facultatif)" ${statut==='present'?'disabled':''}></td>
     </tr>`;
@@ -4465,7 +4474,7 @@ function renderAbsences(){
     const el = ELEVES.find(e=>e.id===a.eleveId);
     const estRetard = a.type==='retard';
     const detail = estRetard
-      ? `${a.heuresRetard??'—'} h de retard`
+      ? `${a.heuresRetard??'—'} h de retard <span class="badge ${a.justifiee?'paye':'impaye'}">${a.justifiee?'Justifié':'Non justifié'}</span>`
       : `<span class="badge ${a.justifiee?'paye':'impaye'}">${a.justifiee?'Justifiée':'Non justifiée'}</span>`;
     return `<tr><td>${a.date}</td><td>${el?esc(el.nom)+' '+esc(el.prenom):'—'}</td>
       <td>${estRetard?'Retard':'Absence'}</td>
@@ -4555,6 +4564,7 @@ function buildFeuilleAppelHTML(classe, date){
       <td style="text-align:center;">${estAbsent && abs.justifiee ? '✓' : ''}</td>
       <td style="text-align:center;">${estRetard ? '✗' : ''}</td>
       <td style="text-align:center;">${estRetard ? (abs.heuresRetard??'') : ''}</td>
+      <td style="text-align:center;">${estRetard && abs.justifiee ? '✓' : ''}</td>
       <td>${abs?esc(abs.motif)||'':''}</td></tr>`;
   }).join('');
   return `
@@ -4563,8 +4573,8 @@ function buildFeuilleAppelHTML(classe, date){
       <h3>Feuille d'appel — ${esc(classe)}</h3>
       <p class="bulletin-eleve-line">Date : ${date}</p>
       <table class="receipt-table">
-        <thead><tr><th>N°</th><th>Matricule</th><th>Nom et prénom</th><th>Absent</th><th>Justifiée</th><th>Retard</th><th>Heures de retard</th><th>Motif</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="8">Aucun élève.</td></tr>'}</tbody>
+        <thead><tr><th>N°</th><th>Matricule</th><th>Nom et prénom</th><th>Absent</th><th>Justifiée</th><th>Retard</th><th>Heures de retard</th><th>Justifié</th><th>Motif</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="9">Aucun élève.</td></tr>'}</tbody>
       </table>
       <table class="signature-table">
         <tr><td><div class="sig-label">Le Professeur / Surveillant</div><div class="sig-line">Signature</div></td></tr>
@@ -5671,7 +5681,7 @@ function buildBulletinHTML(eleveId, trimestre){
 function buildClasseBulletinsHTML(classe, trimestre){
   _classementCacheActif = new Map();
   try {
-    const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
+    const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif').sort((a,b)=>a.nom.localeCompare(b.nom));
     return eleves.map((e,i)=> `<div style="${i<eleves.length-1?'page-break-after:always;':''}">${buildBulletinHTML(e.id, trimestre)}</div>`).join('');
   } finally {
     _classementCacheActif = null;
@@ -5683,7 +5693,7 @@ function buildClasseBulletinsHTML(classe, trimestre){
 function buildGrilleNotesPrintHTML(classe, matiereId, trimestre){
   const schoolName = esc(document.getElementById('school-name').value);
   const matiere = matieresPourClasse(classe).find(m=>m.id===matiereId);
-  const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif').sort((a,b)=>a.nom.localeCompare(b.nom));
   const cl = classementParMatiere(classe, matiereId, trimestre);
   const rows = eleves.map((e)=>{
     const n = NOTES.find(x=>x.eleveId===e.id && x.matiereId===matiereId && x.trimestre===trimestre);
@@ -5714,7 +5724,7 @@ function buildGrilleNotesPrintHTML(classe, matiereId, trimestre){
 // professeur principal pour vérifier toutes les notes de tous les élèves en une seule fois.
 function buildFicheRecapGeneraleClassePrintHTML(classe, trimestre){
   const matieres = matieresPourClasse(classe);
-  const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif').sort((a,b)=>a.nom.localeCompare(b.nom));
   const clGenerale = classementClasse(classe, trimestre);
   const classementsMatieres = matieres.map(m=>classementParMatiere(classe, m.id, trimestre));
   const rows = eleves.map(e=>{
@@ -5750,7 +5760,7 @@ function buildFicheRecapGeneraleClassePrintHTML(classe, trimestre){
 // vérification en classe par le professeur principal avant impression des bulletins.
 function buildFicheResultatsTrimestrePrintHTML(classe, trimestre){
   const schoolName = esc(document.getElementById('school-name').value);
-  const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif').sort((a,b)=>a.nom.localeCompare(b.nom));
   const cl = classementClasse(classe, trimestre);
   const rows = eleves.map((e)=>{
     const t = computeTrimestre(e.id, trimestre);
@@ -5784,7 +5794,7 @@ function buildGrilleBlancPrintHTML(classe, matiereId, examenBlancId){
   const schoolName = esc(document.getElementById('school-name').value);
   const matiere = matieresPourClasse(classe).find(m=>m.id===matiereId);
   const session = EXAMENS_BLANCS.find(eb=>eb.id===examenBlancId);
-  const eleves = ELEVES.filter(e=>e.classe===classe).sort((a,b)=>a.nom.localeCompare(b.nom));
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif').sort((a,b)=>a.nom.localeCompare(b.nom));
   const rows = eleves.map((e,i)=>{
     const n = NOTES_BLANC.find(x=>x.eleveId===e.id && x.matiereId===matiereId && x.examenBlancId===examenBlancId);
     const val = n && n.note!==null && n.note!==undefined ? n.note : null;
@@ -5829,7 +5839,7 @@ function buildDeliberationBlancHTML(classe, examenBlancId, decisionCle){
   const session = EXAMENS_BLANCS.find(eb=>eb.id===examenBlancId);
   const labelParCle = { admis: PARAMS.libelleAdmis, admissible: PARAMS.libelleAdmissible, ajourne: PARAMS.libelleAjourne };
   const decisionLabel = labelParCle[decisionCle] || decisionCle;
-  const eleves = ELEVES.filter(e=>e.classe===classe)
+  const eleves = ELEVES.filter(e=>e.classe===classe && e.statut!=='Inactif')
     .filter(e=>{
       const moy = computeExamenBlanc(e.id, examenBlancId).moyenneGenerale;
       return decisionFinaleBlanc(e.id, examenBlancId, classe, moy).decision === decisionLabel;
@@ -6691,7 +6701,7 @@ function attachHandlers(){
       const txtMotif = tr.querySelector('.txt-motif');
       sel?.addEventListener('change', ()=>{
         const v = sel.value;
-        cellJustifiee.style.display = v==='absent' ? '' : 'none';
+        cellJustifiee.style.display = v==='present' ? 'none' : '';
         cellHeure.style.display = v==='retard' ? '' : 'none';
         txtMotif.disabled = v==='present';
         if(v==='present'){ chkJustifiee.checked = false; txtHeuresRetard.value = ''; txtMotif.value = ''; }
@@ -6709,7 +6719,8 @@ function attachHandlers(){
           ABSENCES.push({ id: uid(), eleveId, date: dateAbsenceSaisie, type:'absent', justifiee, motif });
         } else if(statut==='retard'){
           const heuresRetard = Number(tr.querySelector('.txt-heures-retard').value)||0;
-          ABSENCES.push({ id: uid(), eleveId, date: dateAbsenceSaisie, type:'retard', heuresRetard, motif });
+          const justifiee = tr.querySelector('.chk-justifiee').checked;
+          ABSENCES.push({ id: uid(), eleveId, date: dateAbsenceSaisie, type:'retard', heuresRetard, justifiee, motif });
         }
       });
       await saveAbsences();
@@ -6749,7 +6760,7 @@ function attachHandlers(){
       const lignes = absences.map(a=>{
         const el = ELEVES.find(x=>x.id===a.eleveId);
         const estRetard = a.type==='retard';
-        return [a.date, el?el.nom:'—', el?el.prenom:'—', estRetard?'Retard':'Absence', estRetard?((a.heuresRetard??'')+' h'):(a.justifiee?'Justifiée':'Non justifiée'), a.motif||''];
+        return [a.date, el?el.nom:'—', el?el.prenom:'—', estRetard?'Retard':'Absence', estRetard?`${a.heuresRetard??''} h (${a.justifiee?'Justifié':'Non justifié'})`:(a.justifiee?'Justifiée':'Non justifiée'), a.motif||''];
       });
       exportCSV(`absences_${classe}`, ['Date','Nom','Prénom','Type','Justifiée / Heures de retard','Motif'], lignes);
     });
