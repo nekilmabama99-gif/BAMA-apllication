@@ -124,6 +124,30 @@
   }
   .content{padding:26px 32px 60px 32px;overflow-y:auto;}
 
+  /* Recherche globale (topbar) */
+  .recherche-globale-wrap{position:relative;flex:1;max-width:280px;margin:0 14px;}
+  #recherche-globale{
+    width:100%;font-size:13px;padding:8px 12px;border:1px solid var(--line);
+    border-radius:var(--radius);outline:none;background:var(--bg,#f7f6f2);
+  }
+  #recherche-globale:focus{border-color:var(--gold);}
+  .recherche-globale-resultats{
+    position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:50;
+    background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:320px;overflow-y:auto;display:none;
+  }
+  .recherche-globale-resultats.visible{display:block;}
+  .recherche-globale-resultats .item{
+    display:flex;justify-content:space-between;gap:10px;padding:9px 12px;cursor:pointer;
+    font-size:13px;border-bottom:1px solid var(--line);
+  }
+  .recherche-globale-resultats .item:last-child{border-bottom:none;}
+  .recherche-globale-resultats .item:hover{background:var(--bg,#f7f6f2);}
+  .recherche-globale-resultats .item .muted-inline{color:var(--ink-soft);font-size:11.5px;white-space:nowrap;}
+  .recherche-globale-resultats .item.vide{color:var(--ink-soft);cursor:default;}
+  .recherche-globale-resultats .item.vide:hover{background:transparent;}
+  @media (max-width:900px){ .recherche-globale-wrap{max-width:none;order:3;flex-basis:100%;margin:8px 0 0 0;} }
+
   /* KPI cards */
   .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:26px;}
   .kpi{
@@ -621,6 +645,10 @@
       <div class="sub" id="page-sub">Vue d'ensemble de l'établissement</div>
     </div>
     <input class="school-name-input" id="school-name" value="Lycée Privé — nom de l'établissement" title="Nom de l'établissement">
+    <div class="recherche-globale-wrap">
+      <input id="recherche-globale" placeholder="Rechercher un élève (nom, matricule)…" autocomplete="off">
+      <div id="recherche-globale-resultats" class="recherche-globale-resultats"></div>
+    </div>
     <div style="display:flex;align-items:center;gap:8px;">
       <label for="annee-select" class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;">Année</label>
       <select id="annee-select" style="min-width:120px;"></select>
@@ -807,6 +835,7 @@ let ANNEES = [];            // [{ id, libelle }] — historique des années cré
 let anneeActiveId = null;   // année scolaire "en cours" — celle où on saisit
 let anneeAffichee = null;   // année sélectionnée dans le menu déroulant (peut être une année archivée, consultée en lecture seule)
 let ARCHIVES = {};          // { [anneeId]: { libelle, eleves, notes, decisions, finances, clotureLe } } — snapshot au moment de la bascule
+let JOURNAL = [];           // [{ date, utilisateur, action, details }] — journal d'audit des actions sensibles (voir journaliser())
 
 let LOGO_DATA_URL = '';     // logo de l'établissement (data URL base64), affiché sur tous les documents imprimés
 let CACHET_SIGNATURE_DATA_URL = ''; // cachet/signature du directeur ou proviseur (data URL), affiché sur la carte scolaire
@@ -912,6 +941,68 @@ async function imageDBSet(cle, valeur){
   }catch(e){ console.error("Erreur d'écriture d'image", cle, e); showToast("Erreur d'enregistrement d'une image (mémoire pleine ?)"); return false; }
 }
 
+/* ---------- Stockage IndexedDB générique pour les données volumineuses non-image (archives
+   multi-années) ---------- Même logique que pour les photos ci-dessus : localStorage est
+   plafonné à quelques Mo, et ARCHIVES (un instantané complet élèves+notes+finances par année
+   scolaire écoulée) grossit chaque année sans jamais être purgé. Un établissement de taille
+   moyenne cumulant plusieurs années peut donc finir par saturer localStorage. Base IndexedDB
+   séparée de celle des images pour rester simple (versions/migrations indépendantes). */
+let _donneesDbPromise = null;
+function ouvrirDonneesDB(){
+  if(!_donneesDbPromise){
+    _donneesDbPromise = new Promise((resolve, reject)=>{
+      const req = indexedDB.open('gestion_ecole_donnees', 1);
+      req.onupgradeneeded = ()=>{ req.result.createObjectStore('donnees'); };
+      req.onsuccess = ()=>resolve(req.result);
+      req.onerror = ()=>reject(req.error);
+    });
+  }
+  return _donneesDbPromise;
+}
+async function donneeDBGet(cle){
+  try{
+    const db = await ouvrirDonneesDB();
+    return await new Promise((resolve, reject)=>{
+      const tx = db.transaction('donnees','readonly');
+      const req = tx.objectStore('donnees').get(cle);
+      req.onsuccess = ()=>resolve(req.result===undefined ? null : req.result);
+      req.onerror = ()=>reject(req.error);
+    });
+  }catch(e){ console.error('Erreur de lecture IndexedDB', cle, e); return null; }
+}
+async function donneeDBSet(cle, valeur){
+  try{
+    const db = await ouvrirDonneesDB();
+    return await new Promise((resolve, reject)=>{
+      const tx = db.transaction('donnees','readwrite');
+      const store = tx.objectStore('donnees');
+      if(valeur!==null && valeur!==undefined) store.put(valeur, cle); else store.delete(cle);
+      tx.oncomplete = ()=>resolve(true);
+      tx.onerror = ()=>reject(tx.error);
+    });
+  }catch(e){
+    console.error("Erreur d'écriture IndexedDB (archives)", cle, e);
+    alert("⚠ ÉCHEC DE L'ENREGISTREMENT DES ARCHIVES !\n\nLes archives de l'année écoulée n'ont PAS pu être sauvegardées (mémoire de stockage pleine ou inaccessible).\n\nFaites immédiatement une sauvegarde externe si possible (Paramètres → Sauvegarde), puis fermez et rouvrez l'application. Si le problème persiste, contactez le support.");
+    return false;
+  }
+}
+
+// Protection contre le recul délibéré de l'horloge système pour prolonger artificiellement une
+// licence expirée : on mémorise la date la plus avancée jamais vue par l'application (persistée
+// dans localStorage, indépendante de l'horloge courante) et on l'utilise, plutôt que Date.now()
+// brut, pour toute comparaison d'expiration de licence. Reculer l'horloge ne fait donc plus
+// reculer la date effective utilisée par le contrôle — elle ne peut que progresser (cliquet).
+// Volontairement NON bloquant pour le reste de l'application (pas d'écran d'erreur si l'horloge
+// semble incohérente) : un utilisateur ayant simplement corrigé une horloge auparavant mal
+// réglée (avance accidentelle) ne doit jamais se retrouver enfermé hors de ses propres données.
+function horodatageEffectifLicence(){
+  const maintenant = Date.now();
+  const vu = Number(storageGet('horodatage-max-vu')) || 0;
+  const effectif = Math.max(maintenant, vu);
+  if(effectif > vu) storageSet('horodatage-max-vu', effectif);
+  return effectif;
+}
+
 /* ---------- Licence / activation ----------
    Signature asymétrique (ECDSA P-256) : ce fichier ne contient QUE la clé
    PUBLIQUE, capable de vérifier une licence mais jamais d'en fabriquer une.
@@ -957,7 +1048,7 @@ async function decoderEtVerifierLicence(licenceBrute, clientName){
     const payloadBytes = b64urlVersBytes(payloadB64);
     const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
     if(normaliserTexte(payload.n) !== normaliserTexte(clientName)) return null;
-    if(payload.exp && new Date(payload.exp).getTime() < Date.now()) return { expiree:true, payload };
+    if(payload.exp && new Date(payload.exp).getTime() < horodatageEffectifLicence()) return { expiree:true, payload };
     const cle = await obtenirClePublique();
     const sig = b64urlVersBytes(sigB64);
     const ok = await crypto.subtle.verify(
@@ -979,7 +1070,7 @@ async function estActive(){
   // activation dans localStorage et débloquer le logiciel sans aucune licence valide.
   const resultat = await decoderEtVerifierLicence(a.licence, a.clientName);
   if(!(resultat && resultat.valide)) return false;
-  if(a.exp && new Date(a.exp).getTime() < Date.now()) return false;
+  if(a.exp && new Date(a.exp).getTime() < horodatageEffectifLicence()) return false;
   // Recalculé à chaque démarrage (pas seulement comparé à une valeur stockée) : copier tout le
   // dossier de données de l'app sur un autre ordinateur ne suffit donc pas à contourner le
   // verrouillage machine, puisque l'identifiant est recalculé sur la machine réelle à chaque fois.
@@ -1174,7 +1265,18 @@ async function loadAll(){
 
   ANNEES = storageGet('annees-data') || [];
   anneeActiveId = storageGet('annee-active-data') || null;
-  ARCHIVES = storageGet('archives-data') || {};
+  // ARCHIVES vit désormais dans IndexedDB (voir donneeDBGet/donneeDBSet ci-dessus), plus dans
+  // localStorage — migration automatique et silencieuse de l'ancien emplacement au premier
+  // chargement suivant la mise à jour, puis nettoyage de l'ancienne copie.
+  const archivesLocalStorageAncien = storageGet('archives-data');
+  if(archivesLocalStorageAncien){
+    ARCHIVES = archivesLocalStorageAncien;
+    await donneeDBSet('archives-data', ARCHIVES);
+    localStorage.removeItem(STORAGE_PREFIX + 'archives-data');
+  } else {
+    ARCHIVES = (await donneeDBGet('archives-data')) || {};
+  }
+  JOURNAL = (await donneeDBGet('journal-data')) || [];
   if(ANNEES.length===0 || !anneeActiveId){
     const debut = new Date().getMonth() >= 7 ? new Date().getFullYear() : new Date().getFullYear()-1;
     const premiereAnnee = { id: uid(), libelle: `${debut}-${debut+1}` };
@@ -1189,7 +1291,10 @@ async function loadAll(){
   // l'établissement (comparaison classe actuelle / classe de l'année précédente) —
   // ne fait que confirmer un « Oui », jamais l'inverse (un redoublement survenu
   // avant l'arrivée dans l'établissement reste une saisie manuelle sur la fiche élève).
-  ELEVES.forEach(e => { if(estRedoublantAnneeCourante(e.id)) e.aDejaRedouble = true; });
+  // Le redoublement doit rester acquis jusqu'à la fin du cycle (collège/lycée), même
+  // après que l'élève est passé en classe supérieure l'année suivante : on fige donc ici
+  // le nom de la classe doublée, et pas seulement le drapeau aDejaRedouble.
+  ELEVES.forEach(e => { if(estRedoublantAnneeCourante(e.id)){ e.aDejaRedouble = true; if(!e.classeDejaDoublee) e.classeDejaDoublee = e.classe; } });
 
   // Migration des anciennes notes (une note unique par matière/trimestre) vers le nouveau format devoir1/devoir2/composition
   const needsMigration = NOTES.some(n => n.devoir1===undefined && n.composition===undefined);
@@ -1237,7 +1342,24 @@ const saveProfPrincipal = () => save('prof-principal-data', PROF_PRINCIPAL);
 const savePaie = () => save('paie-data', PAIE);
 const saveAnnees = () => save('annees-data', ANNEES);
 const saveAnneeActive = () => save('annee-active-data', anneeActiveId);
-const saveArchives = () => save('archives-data', ARCHIVES);
+const saveArchives = () => donneeDBSet('archives-data', ARCHIVES);
+const saveJournal = () => donneeDBSet('journal-data', JOURNAL);
+// Journal d'audit : trace qui a fait quoi et quand, pour les actions sensibles (suppressions,
+// finances, comptes utilisateurs, bascule d'année, restauration). Volontairement pas exhaustif
+// (la saisie courante des notes n'est pas journalisée, sous peine de noyer le journal) — il
+// couvre les actions destructrices ou administratives pour lesquelles la traçabilité compte le
+// plus. Stocké dans IndexedDB comme les archives (peut grossir sur plusieurs années) et jamais
+// écrasé par une restauration de sauvegarde (voir importBackup).
+function journaliser(action, details){
+  JOURNAL.push({
+    date: new Date().toISOString(),
+    utilisateur: UTILISATEUR_COURANT ? `${UTILISATEUR_COURANT.nom} (${UTILISATEUR_COURANT.roleLabel||'—'})` : 'Accès libre (aucun compte)',
+    action, details: details||''
+  });
+  // Plafonné pour éviter une croissance illimitée : conserve les 5000 dernières actions.
+  if(JOURNAL.length > 5000) JOURNAL = JOURNAL.slice(JOURNAL.length - 5000);
+  saveJournal();
+}
 
 // Supprime, dans TOUS les autres modules, les données rattachées à un élève : sans ça, supprimer
 // un élève ne retirait que sa fiche (voir data-action="del-eleve"), en laissant orphelines ses
@@ -1530,7 +1652,7 @@ function verifierRappelSauvegarde(){
   }
 }
 
-function exportBackup(){
+async function exportBackup(){
   const backup = {
     version: 2,
     date: new Date().toISOString(),
@@ -1542,11 +1664,31 @@ function exportBackup(){
     decisions: DECISIONS, profPrincipal: PROF_PRINCIPAL, paie: PAIE,
     annees: ANNEES, archives: ARCHIVES, anneeActiveId, utilisateurs: UTILISATEURS,
   };
-  const blob = new Blob([JSON.stringify(backup, null, 2)], {type:'application/json'});
+  const json = JSON.stringify(backup, null, 2);
+  const dateStr = new Date().toISOString().slice(0,10);
+  // Compression gzip native (CompressionStream, intégrée au navigateur/WebView depuis 2020,
+  // aucune dépendance externe à embarquer) : les photos élèves en base64 représentent le plus
+  // gros du volume et se compressent mal, mais tout le reste (texte JSON répétitif) se réduit
+  // fortement — utile en particulier pour l'envoi par email ou clé USB. Repli silencieux sur du
+  // JSON brut non compressé si l'API est absente (anciennes WebView Android) : importBackup lit
+  // les deux formats indifféremment.
+  let blob, nomFichier;
+  if(typeof CompressionStream === 'function'){
+    try{
+      const flux = new Blob([json]).stream().pipeThrough(new CompressionStream('gzip'));
+      blob = await new Response(flux).blob();
+      nomFichier = `sauvegarde_etablissement_${dateStr}.json.gz`;
+    }catch(e){
+      console.error('Compression indisponible, sauvegarde non compressée :', e);
+    }
+  }
+  if(!blob){
+    blob = new Blob([json], {type:'application/json'});
+    nomFichier = `sauvegarde_etablissement_${dateStr}.json`;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  const dateStr = new Date().toISOString().slice(0,10);
-  a.href = url; a.download = `sauvegarde_etablissement_${dateStr}.json`;
+  a.href = url; a.download = nomFichier;
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   storageSet('derniere-sauvegarde-le', new Date().toISOString());
@@ -1557,9 +1699,29 @@ function exportBackup(){
 function importBackup(file){
   const reader = new FileReader();
   reader.onload = async (e)=>{
+    let texteJson;
+    try{
+      const octets = new Uint8Array(e.target.result);
+      // Détection du format par les deux premiers octets (signature gzip 0x1f 0x8b), plutôt que
+      // par l'extension du fichier : plus fiable si le fichier a été renommé ou joint par email.
+      const estGzip = octets.length>2 && octets[0]===0x1f && octets[1]===0x8b;
+      if(estGzip){
+        if(typeof DecompressionStream !== 'function'){
+          alert("Ce fichier de sauvegarde est compressé (.gz) mais cet appareil ne sait pas le décompresser.\n\nOuvrez-le plutôt depuis l'application de bureau (Windows/Electron), ou redemandez une sauvegarde non compressée.");
+          return;
+        }
+        const flux = new Blob([octets]).stream().pipeThrough(new DecompressionStream('gzip'));
+        texteJson = await new Response(flux).text();
+      } else {
+        texteJson = new TextDecoder('utf-8').decode(octets);
+      }
+    }catch(err){
+      alert("Fichier invalide : impossible de le lire ou de le décompresser.\n\nAucune donnée n'a été modifiée.");
+      return;
+    }
     let data;
     try{
-      data = JSON.parse(e.target.result);
+      data = JSON.parse(texteJson);
     }catch(err){
       alert("Fichier invalide : ce n'est pas un fichier de sauvegarde JSON lisible.\n\nAucune donnée n'a été modifiée.");
       return;
@@ -1613,13 +1775,17 @@ function importBackup(file){
       updateCrestDisplay();
       updateAnneeSelect();
       storageSet('derniere-sauvegarde-le', new Date().toISOString());
+      // Le journal d'audit n'est volontairement PAS écrasé par une restauration (il n'est pas
+      // inclus dans le fichier de sauvegarde) : une restauration doit rester elle-même tracée,
+      // pas effacer l'historique des actions précédentes.
+      journaliser('Restauration de sauvegarde', `${ecoleBackup} — ${nbEleves} élève(s), sauvegarde du ${dateBackup}`);
       showToast('Sauvegarde restaurée');
       render();
     }catch(err){
       showToast('Erreur pendant la restauration');
     }
   };
-  reader.readAsText(file);
+  reader.readAsArrayBuffer(file);
 }
 
 /* ---------- Navigation ---------- */
@@ -1646,6 +1812,63 @@ document.getElementById('nav').addEventListener('click', (e)=>{
   document.getElementById('page-sub').textContent = titles[currentTab][1];
   render();
 });
+
+/* ---------- Recherche globale (topbar) ----------
+   Recherche un élève par nom/prénom/matricule depuis n'importe quel onglet, et ouvre
+   directement sa fiche de modification (même mécanisme que le bouton "Modifier" de l'onglet
+   Élèves) — évite de devoir changer d'onglet et re-taper son nom dans le filtre local. */
+(function(){
+  const champ = document.getElementById('recherche-globale');
+  const resultatsEl = document.getElementById('recherche-globale-resultats');
+  if(!champ || !resultatsEl) return;
+
+  function rechercher(texte){
+    const q = normaliserTexte(texte.trim());
+    if(!q){ resultatsEl.classList.remove('visible'); resultatsEl.innerHTML=''; return; }
+    const correspond = ELEVES.filter(e=>{
+      const cible = normaliserTexte(`${e.nom} ${e.prenom} ${e.matricule||''}`);
+      return cible.includes(q);
+    }).slice(0, 8);
+    resultatsEl.innerHTML = correspond.length ? correspond.map(e=>`
+      <div class="item" data-id="${esc(e.id)}">
+        <span><strong>${esc(e.nom)} ${esc(e.prenom)}</strong></span>
+        <span class="muted-inline">${esc(e.classe)}${e.matricule?' · '+esc(e.matricule):''}</span>
+      </div>`).join('') : `<div class="item vide">Aucun élève trouvé</div>`;
+    resultatsEl.classList.add('visible');
+  }
+
+  champ.addEventListener('input', ()=> rechercher(champ.value));
+  champ.addEventListener('focus', ()=>{ if(champ.value.trim()) rechercher(champ.value); });
+  document.addEventListener('click', (e)=>{
+    if(!e.target.closest('.recherche-globale-wrap')) resultatsEl.classList.remove('visible');
+  });
+  champ.addEventListener('keydown', (e)=>{ if(e.key==='Escape'){ champ.blur(); resultatsEl.classList.remove('visible'); } });
+
+  resultatsEl.addEventListener('click', async (e)=>{
+    const item = e.target.closest('.item[data-id]');
+    if(!item) return;
+    resultatsEl.classList.remove('visible');
+    champ.value = '';
+    await allerVersEleve(item.dataset.id);
+  });
+})();
+
+async function allerVersEleve(id){
+  const el = ELEVES.find(e=>e.id===id);
+  if(!el) return;
+  anneeAffichee = anneeActiveId; // sort d'une éventuelle vue d'archive pour rejoindre l'année en cours
+  currentTab = 'eleves';
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab==='eleves'));
+  document.getElementById('page-title').textContent = titles.eleves[0];
+  document.getElementById('page-sub').textContent = titles.eleves[1];
+  CLASSES_TABLEAU_ETENDU.add(el.classe);
+  render();
+  const input = document.getElementById('filter-eleve-nom');
+  if(input) input.value = `${el.nom} ${el.prenom}`;
+  render();
+  const ok = await ouvrirModaleEditionEleve(id);
+  if(ok){ showToast('Fiche élève mise à jour'); render(); }
+}
 
 /* ---------- Render router ---------- */
 function render(){
@@ -2216,8 +2439,11 @@ async function basculerAnneeScolaire(nouveauLibelle){
         bilan.passent++;
       }
     } else {
-      // Redouble (ou décision non conclusive) : reste bloqué dans la même classe
+      // Redouble (ou décision non conclusive) : reste bloqué dans la même classe.
+      // On fige aussi le nom de la classe doublée : ce statut doit rester visible
+      // sur les bulletins jusqu'à la fin du cycle, même après un passage ultérieur.
       e.aDejaRedouble = true;
+      e.classeDejaDoublee = e.classe;
       bilan.redoublent++;
     }
   });
@@ -3499,7 +3725,7 @@ function buildCertificatScolariteHTML(eleveId){
       <h2>Certificat de scolarité</h2>
       <div class="certificat-corps">
         <p>${introTexte}</p>
-        <p class="certificat-eleve-nom"><strong>${esc(el.nom)} ${esc(el.prenom)}</strong>${naissance}${filiation}<br>
+        <p class="certificat-eleve-nom"><strong>${esc(el.nom)} ${esc(el.prenom)}</strong> (Sexe : <strong>${esc(el.sexe)||'—'}</strong>)${naissance}${filiation}<br>
         immatriculé(e) sous le numéro <strong>${esc(el.matricule)}</strong>,</p>
         <p>${corpsTexte}</p>
         <p>${formuleFinale}</p>
@@ -3537,7 +3763,7 @@ function buildCertificatNonRedevanceHTML(eleveId){
       <h2>Certificat de non-redevance</h2>
       <div class="certificat-corps">
         <p>${introTexte}</p>
-        <p class="certificat-eleve-nom"><strong>${esc(el.nom)} ${esc(el.prenom)}</strong>,${filiation} immatriculé(e) sous le numéro <strong>${esc(el.matricule)}</strong>,
+        <p class="certificat-eleve-nom"><strong>${esc(el.nom)} ${esc(el.prenom)}</strong> (Sexe : <strong>${esc(el.sexe)||'—'}</strong>),${filiation} immatriculé(e) sous le numéro <strong>${esc(el.matricule)}</strong>,
         inscrit(e) en classe de <strong>${esc(el.classe)}</strong> au titre de l'année scolaire <strong>${anneeLib}</strong>,</p>
         <p>${statutTexte}</p>
         <p>${formuleFinale}</p>
@@ -3616,7 +3842,7 @@ function buildAttestationFelicitationsHTML(eleveId, trimestre, mentionObj){
       <div class="attestation-ornement">✦ ✦ ✦</div>
       <div class="attestation-texte">${introTexte}</div>
       <div class="attestation-nom">${esc(el.nom)} ${esc(el.prenom)}</div>
-      <div class="attestation-texte">Élève en classe de <strong>${esc(el.classe)}</strong>,
+      <div class="attestation-texte">Élève (Sexe : <strong>${esc(el.sexe)||'—'}</strong>) en classe de <strong>${esc(el.classe)}</strong>,
         ${esc(mentionObj?.texte || "pour son excellent travail")} au cours du ${esc(trimestre)} de l'année scolaire ${anneeLib}.</div>
       ${blocMoyennes}
       <div class="attestation-mention">${mentionFinale}</div>
@@ -3661,7 +3887,7 @@ function buildAvisBaisseResultatsHTML(eleveId, trimestre){
       <div class="attestation-ornement">⚠</div>
       <div class="attestation-texte">${introTexte}</div>
       <div class="attestation-nom">${esc(el.nom)} ${esc(el.prenom)}</div>
-      <div class="attestation-texte">Élève en classe de <strong>${esc(el.classe)}</strong>, dont les résultats affichent une baisse au cours du ${esc(trimestre)} de l'année scolaire ${anneeLib}.</div>
+      <div class="attestation-texte">Élève (Sexe : <strong>${esc(el.sexe)||'—'}</strong>) en classe de <strong>${esc(el.classe)}</strong>, dont les résultats affichent une baisse au cours du ${esc(trimestre)} de l'année scolaire ${anneeLib}.</div>
       ${blocMoyennes}
       <div class="attestation-mention">${mentionFinale}</div>
       <table class="signature-table">
@@ -3731,7 +3957,7 @@ function buildConvocationPaiementHTML(eleveId, dateConv, heureConv, lieuConv){
       <h2>Lettre de convocation</h2>
       <div class="certificat-corps">
         <p>À l'attention de : Parent(s) / Tuteur(trice) de l'élève <strong>${esc(el.nom)} ${esc(el.prenom)}</strong>,
-        classe de <strong>${esc(el.classe)}</strong> (matricule <strong>${esc(el.matricule)}</strong>)${el.contact?', contact : '+esc(el.contact):''}.</p>
+        classe de <strong>${esc(el.classe)}</strong> (matricule <strong>${esc(el.matricule)}</strong>, sexe : <strong>${esc(el.sexe)||'—'}</strong>)${el.contact?', contact : '+esc(el.contact):''}.</p>
         <p>${introTexte}</p>
         <p>${motifTexte}</p>
         <p>${rdvTexte}</p>
@@ -3768,7 +3994,7 @@ function buildConvocationAbsencesHTML(eleveId, trimestre, dateConv, heureConv, l
       <h2>Lettre de convocation</h2>
       <div class="certificat-corps">
         <p>À l'attention de : Parent(s) / Tuteur(trice) de l'élève <strong>${esc(el.nom)} ${esc(el.prenom)}</strong>,
-        classe de <strong>${esc(el.classe)}</strong> (matricule <strong>${esc(el.matricule)}</strong>)${el.contact?', contact : '+esc(el.contact):''}.</p>
+        classe de <strong>${esc(el.classe)}</strong> (matricule <strong>${esc(el.matricule)}</strong>, sexe : <strong>${esc(el.sexe)||'—'}</strong>)${el.contact?', contact : '+esc(el.contact):''}.</p>
         <p>${introTexte}</p>
         <p>${motifTexte}</p>
         <p>${rdvTexte}</p>
@@ -4191,7 +4417,7 @@ function buildHistoriqueEleveHTML(eleveId){
   return `
     <div class="bulletin" style="max-width:760px;">
       ${printHeader()}
-      <h3>Historique scolaire — ${esc(el0.nom)} ${esc(el0.prenom)}${el0.matricule?' (matricule '+esc(el0.matricule)+')':''}</h3>
+      <h3>Historique scolaire — ${esc(el0.nom)} ${esc(el0.prenom)} (Sexe : ${esc(el0.sexe)||'—'})${el0.matricule?' — matricule '+esc(el0.matricule):''}</h3>
       <table class="receipt-table">
         <thead><tr><th>Année scolaire</th><th>Classe</th><th>Moyenne annuelle</th><th>Rang</th><th>Décision</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="5">Aucun historique disponible pour cet élève.</td></tr>'}</tbody>
@@ -4689,10 +4915,32 @@ function buildEmploiDuTempsHTML(classe){
 
 /* ---------- Paramètres ---------- */
 function renderInfosAdmin(){
+  // Journal d'audit : les entrées les plus récentes en premier, limité à l'affichage des 200
+  // dernières (le journal complet, jusqu'à 5000 entrées, reste exporté intégralement en CSV).
+  const entreesRecentes = JOURNAL.slice().reverse().slice(0, 200);
+  const lignesJournal = entreesRecentes.map(j=>`
+    <tr>
+      <td style="white-space:nowrap;">${new Date(j.date).toLocaleString('fr-FR')}</td>
+      <td>${esc(j.utilisateur)}</td>
+      <td>${esc(j.action)}</td>
+      <td>${esc(j.details)}</td>
+    </tr>
+  `).join('');
   return `
   <div class="panel">
     <div class="panel-head"><h3>À propos de ce logiciel</h3></div>
     <p style="font-size:14px;line-height:1.7;">Ce logiciel a été développé par BAMA Nékilma. Pour tout besoin contacter le 67909051 ou le 70148342. Merci pour votre confiance.</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h3>Journal d'audit</h3><p class="desc" style="width:100%;">Trace qui a fait quoi et quand pour les actions sensibles : suppressions, paiements/dépenses, comptes utilisateurs, bascule d'année, restauration de sauvegarde. Une restauration de sauvegarde ne l'efface jamais. ${JOURNAL.length} entrée(s) au total${JOURNAL.length>200?' — les 200 plus récentes sont affichées ci-dessous':''}.</p></div>
+    <div class="table-wrap" style="max-height:420px;overflow:auto;">
+      <table>
+        <thead><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Détails</th></tr></thead>
+        <tbody>${lignesJournal || '<tr class="empty-row"><td colspan="4">Aucune action journalisée pour l\'instant.</td></tr>'}</tbody>
+      </table>
+    </div>
+    <button class="btn secondary small" style="margin-top:10px;" data-action="export-journal">Exporter tout le journal (CSV)</button>
   </div>
   `;
 }
@@ -4885,9 +5133,9 @@ function renderParametres(){
   <div class="panel">
     <div class="panel-head"><h3>Sauvegarde de sécurité</h3><p class="desc" style="width:100%;">Vos données sont déjà enregistrées automatiquement sur cet ordinateur. Téléchargez aussi un fichier de secours de temps en temps (avant une réinstallation, un changement d'ordinateur, ou pour garder une copie).</p></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <button class="btn gold" id="btn-export">Télécharger une sauvegarde (.json)</button>
+      <button class="btn gold" id="btn-export">Télécharger une sauvegarde (.json.gz)</button>
       <label class="btn secondary" style="cursor:pointer;">Restaurer une sauvegarde
-        <input type="file" id="input-import" accept="application/json" style="display:none;">
+        <input type="file" id="input-import" accept="application/json,.json,.gz,.json.gz" style="display:none;">
       </label>
     </div>
     <p class="muted" style="margin-top:8px;">${(() => { const d = storageGet('derniere-sauvegarde-le'); return d ? 'Dernière sauvegarde téléchargée : '+new Date(d).toLocaleString('fr-FR') : "Aucune sauvegarde téléchargée pour l'instant."; })()}</p>
@@ -5359,11 +5607,15 @@ function openPrint(html){
     ? '@media print{ @page{ size:A4 landscape; margin:10mm; } }'
     : '';
   const root = document.getElementById('print-preview-root');
+  // Le bouton PDF natif n'apparaît que dans le build Electron (window.pdfAPI exposé par
+  // preload.js) : absent en Capacitor/Android, où l'impression système reste la seule voie.
+  const boutonPdf = window.pdfAPI ? `<button class="btn secondary small" id="print-preview-pdf" type="button">Télécharger en PDF</button>` : '';
   root.innerHTML = `
     <div class="print-preview-backdrop" id="print-preview-backdrop">
       <div class="print-preview-toolbar">
         <span>Aperçu avant impression</span>
         <button class="btn secondary small" id="print-preview-close" type="button">Fermer</button>
+        ${boutonPdf}
         <button class="btn small" id="print-preview-go" type="button">Imprimer</button>
       </div>
       <div class="print-preview-page">${html}</div>
@@ -5376,6 +5628,24 @@ function openPrint(html){
   document.getElementById('print-preview-go').addEventListener('click', ()=>{
     document.getElementById('print-area').innerHTML = html;
     window.print();
+  });
+  document.getElementById('print-preview-pdf')?.addEventListener('click', async (e)=>{
+    const bouton = e.currentTarget;
+    const texteInitial = bouton.textContent;
+    bouton.disabled = true; bouton.textContent = 'Génération…';
+    try{
+      // Document HTML autonome : tous les <style> de la page en cours (le CSS complet de
+      // l'application, un seul fichier) + le fragment à imprimer, pour que la fenêtre PDF
+      // cachée du processus principal affiche exactement le même rendu que l'aperçu à l'écran.
+      const stylesActuels = Array.from(document.querySelectorAll('style')).map(s=>s.outerHTML).join('\n');
+      const documentComplet = `<!DOCTYPE html><html><head><meta charset="utf-8">${stylesActuels}</head><body>${html}</body></html>`;
+      const nomFichier = 'document_' + new Date().toISOString().slice(0,10);
+      const resultat = await window.pdfAPI.exporterPDF(documentComplet, nomFichier);
+      if(resultat?.erreur){ showToast("Erreur lors de l'export PDF"); console.error(resultat.erreur); }
+      else if(!resultat?.annule) showToast('PDF enregistré : ' + resultat.chemin);
+    } finally {
+      bouton.disabled = false; bouton.textContent = texteInitial;
+    }
   });
   window.addEventListener('afterprint', close, {once:true});
 }
@@ -5521,6 +5791,7 @@ function buildReceiptHTML(paiement){
       <h3>Reçu de paiement — N° ${numero}</h3>
       <table class="receipt-table">
         <tr><td>Élève</td><td>${el?esc(el.nom)+' '+esc(el.prenom):'—'}</td></tr>
+        <tr><td>Sexe</td><td>${el?(esc(el.sexe)||'—'):'—'}</td></tr>
         <tr><td>Classe</td><td>${el?esc(el.classe):'—'}</td></tr>
         <tr><td>Date du versement</td><td>${esc(paiement.date)}</td></tr>
         <tr><td>Montant versé ce jour</td><td>${fmt(paiement.montant)}</td></tr>
@@ -5553,10 +5824,12 @@ function buildBulletinHTML(eleveId, trimestre){
   // Statut de redoublement déduit automatiquement de l'historique de l'établissement
   // (voir estRedoublantAnneeCourante) — n'a plus besoin d'être saisi à la main.
   const redoublant = estRedoublantAnneeCourante(eleveId);
-  // Classe doublée : si l'élève redouble sa classe actuelle cette année, c'est celle-ci ;
-  // sinon, s'il a déjà redoublé avant son arrivée, on affiche la classe indiquée à son
-  // enregistrement ; à défaut, l'élève n'a jamais redoublé.
-  const classeDoublee = redoublant ? el.classe : (el.aDejaRedouble && el.classeDejaDoublee ? el.classeDejaDoublee : '');
+  // Classe doublée : el.classeDejaDoublee est désormais figé dès le redoublement (voir
+  // basculerAnneeScolaire et la synchronisation au chargement) et reste affiché tel quel
+  // même les années suivantes, une fois l'élève passé en classe supérieure — le statut de
+  // redoublant reste acquis jusqu'à la fin du cycle. Le repli sur el.classe ne sert que
+  // pour l'instant même où le redoublement vient d'être détecté, avant la prochaine sauvegarde.
+  const classeDoublee = el.classeDejaDoublee || (redoublant ? el.classe : '');
   const moyClasseParMatiere = moyennesClasseParMatiere(el.classe, trimestre);
 
   // Matières groupées par catégorie (ordre : PARAMS.categoriesMatieres) avec, à la fin de
@@ -5644,9 +5917,9 @@ function buildBulletinHTML(eleveId, trimestre){
       ${printHeader()}
       <h3>Bulletin de notes — ${esc(trimestre)}</h3>
       <div class="bulletin-identite">
-        <span><span class="id-nom">${esc(el.nom)} ${esc(el.prenom)}</span> &nbsp;·&nbsp; Classe : ${esc(el.classe)}${redoublant?'<span class="badge-redoublant">Redoublant(e)</span>':''}</span>
+        <span><span class="id-nom">${esc(el.nom)} ${esc(el.prenom)}</span> &nbsp;·&nbsp; Classe : ${esc(el.classe)}</span>
       </div>
-      <div class="bulletin-info-ligne">Né(e) le <strong>${formatDateFrCourt(el.dateNaissance)||'—'}</strong> à <strong>${esc(el.lieuNaissance)||'—'}</strong> &nbsp;·&nbsp; Matricule : <strong>${esc(el.matricule)||'—'}</strong></div>
+      <div class="bulletin-info-ligne">Né(e) le <strong>${formatDateFrCourt(el.dateNaissance)||'—'}</strong> à <strong>${esc(el.lieuNaissance)||'—'}</strong> &nbsp;·&nbsp; Sexe : <strong>${esc(el.sexe)||'—'}</strong> &nbsp;·&nbsp; Matricule : <strong>${esc(el.matricule)||'—'}</strong></div>
       <div class="bulletin-info-ligne">Classe doublée : <strong>${classeDoublee ? esc(classeDoublee) : 'Néant'}</strong></div>
       <div class="bulletin-info-ligne">Effectif de la classe : <strong>${classement.effectif}</strong></div>
       <div class="bulletin-info-ligne">Aptitude sportive : ${data.dispenseSport ? `Dispensé${data.motifSportDispense?' ('+esc(data.motifSportDispense)+')':''}` : 'Apte'}</div>
@@ -6017,10 +6290,13 @@ function attachHandlers(){
       const delBtn = e.target.closest('[data-action="del-eleve"]');
       if(delBtn){
         if(!(await confirmerAvecCode('Supprimer définitivement cet élève et toutes ses données (notes, paiements) ?'))) return;
+        const elASupprimer = ELEVES.find(x=>x.id===delBtn.dataset.id);
         ELEVES = ELEVES.filter(x=>x.id!==delBtn.dataset.id);
         await imageDBSet('photo-'+delBtn.dataset.id, null);
         await purgerDonneesEleve(delBtn.dataset.id);
-        await saveEleves(); showToast('Élève supprimé'); render(); return;
+        await saveEleves();
+        journaliser('Suppression élève', elASupprimer ? `${elASupprimer.nom} ${elASupprimer.prenom} (classe ${elASupprimer.classe}, matricule ${elASupprimer.matricule||'—'})` : delBtn.dataset.id);
+        showToast('Élève supprimé'); render(); return;
       }
       const printListe = e.target.closest('[data-action="print-classe-eleves"]');
       if(printListe){ openPrint(buildClasseElevesListHTML(printListe.dataset.classe)); return; }
@@ -6348,6 +6624,8 @@ function attachHandlers(){
       FINANCES.paiements.push({ id: uid(), eleveId: f.get('eleveId'), montant,
         date: f.get('date'), statut: f.get('statut') });
       await saveFinances();
+      const elPaiement = ELEVES.find(x=>x.id===f.get('eleveId'));
+      journaliser('Paiement enregistré', `${fmt(montant)} — ${elPaiement?elPaiement.nom+' '+elPaiement.prenom:'élève inconnu'}`);
       showToast('Paiement enregistré');
       render();
     });
@@ -6359,14 +6637,21 @@ function attachHandlers(){
       FINANCES.depenses.push({ id: uid(), libelle: f.get('libelle'), categorie: f.get('categorie'),
         montant, date: f.get('date') });
       await saveFinances();
+      journaliser('Dépense enregistrée', `${fmt(montant)} — ${f.get('libelle')||''}`);
       showToast('Dépense enregistrée');
       render();
     });
     document.querySelectorAll('[data-action="del-paiement"]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         if(!(await confirmerAvecCode('Supprimer ce paiement ?'))) return;
+        const pASupprimer = FINANCES.paiements.find(x=>x.id===btn.dataset.id);
         FINANCES.paiements = FINANCES.paiements.filter(x=>x.id!==btn.dataset.id);
-        await saveFinances(); showToast('Paiement supprimé'); render();
+        await saveFinances();
+        if(pASupprimer){
+          const elP = ELEVES.find(x=>x.id===pASupprimer.eleveId);
+          journaliser('Suppression paiement', `${fmt(pASupprimer.montant)} — ${elP?elP.nom+' '+elP.prenom:'élève inconnu'}`);
+        }
+        showToast('Paiement supprimé'); render();
       });
     });
     document.querySelectorAll('[data-action="recu-paiement"]').forEach(btn=>{
@@ -6378,8 +6663,11 @@ function attachHandlers(){
     document.querySelectorAll('[data-action="del-depense"]').forEach(btn=>{
       btn.addEventListener('click', async ()=>{
         if(!(await confirmerAvecCode('Supprimer cette dépense ?'))) return;
+        const dASupprimer = FINANCES.depenses.find(x=>x.id===btn.dataset.id);
         FINANCES.depenses = FINANCES.depenses.filter(x=>x.id!==btn.dataset.id);
-        await saveFinances(); showToast('Dépense supprimée'); render();
+        await saveFinances();
+        if(dASupprimer) journaliser('Suppression dépense', `${fmt(dASupprimer.montant)} — ${dASupprimer.libelle||''}`);
+        showToast('Dépense supprimée'); render();
       });
     });
 
@@ -6496,7 +6784,9 @@ function attachHandlers(){
         }
         if(!(await confirmerAvecCode('Supprimer ce membre du personnel ?'))) return;
         PERSONNEL = PERSONNEL.filter(x=>x.id!==btn.dataset.id);
-        await savePersonnel(); showToast('Membre supprimé'); render();
+        await savePersonnel();
+        journaliser('Suppression personnel', membre ? `${membre.nom} ${membre.prenom} (${membre.fonction||''})` : btn.dataset.id);
+        showToast('Membre supprimé'); render();
       });
     });
     document.querySelectorAll('[data-action="edit-salaire-fixe"]').forEach(input=>{
@@ -6806,6 +7096,13 @@ function attachHandlers(){
     });
   }
 
+  if(currentTab==='admin'){
+    document.querySelector('[data-action="export-journal"]')?.addEventListener('click', ()=>{
+      exportCSV('journal_audit', ['Date','Utilisateur','Action','Détails'],
+        JOURNAL.slice().reverse().map(j=>[new Date(j.date).toLocaleString('fr-FR'), j.utilisateur, j.action, j.details]));
+    });
+  }
+
   if(currentTab==='parametres'){
     document.getElementById('form-utilisateur')?.addEventListener('submit', async (e)=>{
       e.preventDefault();
@@ -6829,6 +7126,7 @@ function attachHandlers(){
       const hash = await hacherMotDePasse(f.get('motDePasse'), sel);
       UTILISATEURS.push({ id: uid(), nom: (f.get('nom')||'').trim(), identifiant, roleLabel, tabs, sel, hash });
       await saveUtilisateurs();
+      journaliser('Création compte utilisateur', `${(f.get('nom')||'').trim()} (${roleLabel}) — accès : ${tabs.join(', ')}`);
       showToast(estPremierCompte ? 'Compte Direction créé — la connexion est maintenant obligatoire à chaque ouverture' : 'Compte créé');
       render();
     });
@@ -6843,6 +7141,7 @@ function attachHandlers(){
         if(!(await confirmerAvecCode('Supprimer ce compte utilisateur ?'))) return;
         UTILISATEURS = UTILISATEURS.filter(u=>u.id!==btn.dataset.id);
         await saveUtilisateurs();
+        journaliser('Suppression compte utilisateur', cible ? `${cible.nom} (${cible.roleLabel||''})` : btn.dataset.id);
         showToast('Compte supprimé');
         render();
       });
@@ -6884,6 +7183,7 @@ function attachHandlers(){
         u.roleLabel = (f.get('roleLabel')||'').trim();
         u.tabs = nouveauxTabs;
         await saveUtilisateurs();
+        journaliser('Modification compte utilisateur', `${u.nom} (${u.roleLabel}) — accès : ${u.tabs.join(', ')}`);
         showToast('Compte mis à jour pour '+u.nom);
         render();
       });
@@ -6906,6 +7206,7 @@ function attachHandlers(){
         u.sel = nouveauSel;
         u.hash = await hacherMotDePasse(nouveauMdp, nouveauSel);
         await saveUtilisateurs();
+        journaliser('Réinitialisation mot de passe', u.nom);
         showToast('Mot de passe réinitialisé pour '+u.nom);
         render();
       });
@@ -6933,7 +7234,9 @@ function attachHandlers(){
         `Cette action est irréversible. Continuer ?`
       );
       if(!ok) return;
+      const ancienLibelle = anneeLibelle(anneeActiveId);
       const bilan = await basculerAnneeScolaire(nouvelleAnnee);
+      journaliser('Bascule année scolaire', `${ancienLibelle} → ${nouvelleAnnee} — passent : ${bilan.passent}, redoublent : ${bilan.redoublent}, exclus : ${bilan.excluent}, sortis : ${bilan.sortent}`);
       alert(`Bascule terminée.\n\nPassent en classe supérieure : ${bilan.passent}\nRedoublent : ${bilan.redoublent}\nExclus : ${bilan.excluent}\nSortis du système (fin de cycle) : ${bilan.sortent}`);
     });
 
