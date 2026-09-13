@@ -425,8 +425,7 @@
      document de suivi administratif, pas une distinction à afficher.) ---------- */
   .attestation-honneur{
     font-family:var(--serif); color:var(--ink); box-sizing:border-box; position:relative;
-    overflow:hidden; width:100%; max-width:277mm; height:186mm; margin:0 auto; padding:10mm 22mm;
-    display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center;
+    overflow:hidden; width:100%; max-width:277mm; height:186mm; margin:0 auto;
     background:var(--paper); border:2.5pt solid var(--gold);
   }
   .attestation-honneur::before{ content:''; position:absolute; inset:6mm; border:1pt solid var(--navy); pointer-events:none; }
@@ -436,8 +435,17 @@
   .attestation-honneur .attestation-coin.haut-droit{ top:11mm; right:11mm; border-left:none; border-bottom:none; }
   .attestation-honneur .attestation-coin.bas-gauche{ bottom:11mm; left:11mm; border-right:none; border-top:none; }
   .attestation-honneur .attestation-coin.bas-droit{ bottom:11mm; right:11mm; border-left:none; border-top:none; }
-  .attestation-honneur .attestation-watermark{ width:42%; opacity:.06; }
-  .attestation-honneur > *{ position:relative; z-index:1; }
+  .attestation-honneur .attestation-watermark{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:42%; opacity:.06; z-index:0; }
+  /* Le contenu (texte, logo, sceau, signature) est regroupé dans .attestation-honneur-inner,
+     centré et réduit comme un tout (transform:scale calculé par fitAttestationHTML, même
+     principe que fitBulletinHTML pour le bulletin) : quel que soit le nom de l'élève, le nom de
+     l'établissement, ou la longueur des textes personnalisés dans Paramètres, tout est
+     garanti de tenir dans le cadre — rien ne peut jamais déborder. */
+  .attestation-honneur > .attestation-honneur-inner{
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%) scale(1);
+    width:calc(100% - 44mm); box-sizing:border-box; padding:10mm 0; z-index:1;
+    display:flex; flex-direction:column; align-items:center; text-align:center;
+  }
   .attestation-honneur .attestation-logo{ max-width:16mm; max-height:16mm; margin-bottom:2mm; flex-shrink:0; }
   .attestation-honneur .attestation-titre-doc{ font-size:12px; letter-spacing:.4em; text-transform:uppercase; color:var(--gold); }
   .attestation-honneur h1{ font-family:var(--serif); font-size:34px; color:var(--navy); letter-spacing:.07em; text-transform:uppercase; margin:3mm 0 1.5mm 0; }
@@ -447,7 +455,7 @@
   .attestation-honneur .attestation-nom{ font-family:var(--serif); font-size:30px; color:var(--gold); border-bottom:1.5pt solid var(--gold); display:inline-block; padding:2mm 16mm 2.5mm 16mm; margin:1mm 0 5mm 0; }
   .attestation-honneur .attestation-mention{ font-size:15px; font-weight:700; color:var(--navy); margin-bottom:5mm; font-family:var(--sans); max-width:200mm; }
   .attestation-honneur .attestation-sceau{ width:17mm; height:17mm; margin:0 0 2mm 0; opacity:.9; flex-shrink:0; }
-  .attestation-honneur .signature-table{ width:100%; max-width:230mm; margin-top:auto; padding-top:1mm; flex-shrink:0; }
+  .attestation-honneur .signature-table{ width:100%; max-width:230mm; margin-top:6mm; padding-top:1mm; flex-shrink:0; }
   .attestation-honneur .sig-label{ font-size:11px; }
   .attestation-honneur .sig-line{ margin-top:11mm; }
 
@@ -542,6 +550,11 @@
     background:#fff; width:100%; max-width:850px; margin:24px 16px 0 16px;
     padding:26px; box-shadow:0 6px 24px rgba(0,0,0,0.3); border-radius:6px;
   }
+  /* Documents paysage plein format (attestations d'honneur, fiches de paie, emploi du temps) :
+     l'aperçu doit offrir la largeur réelle de la page A4 paysage (277mm imprimables ≈ 1047px),
+     sinon le texte s'enroule différemment à l'écran qu'à l'impression et un ajustement calculé
+     pour la largeur réelle (fitAttestationHTML) paraîtrait déborder dans un aperçu trop étroit. */
+  .print-preview-page.print-preview-page-large{ max-width:1100px; }
 
   .billets-page{
     display:grid; grid-template-columns:1fr 1fr; grid-template-rows:repeat(4,1fr);
@@ -3882,24 +3895,26 @@ function buildAttestationFelicitationsHTML(eleveId, trimestre, mentionObj){
       ${watermark}
       <div class="attestation-coin haut-gauche"></div><div class="attestation-coin haut-droit"></div>
       <div class="attestation-coin bas-gauche"></div><div class="attestation-coin bas-droit"></div>
-      ${LOGO_DATA_URL ? `<img class="attestation-logo" src="${LOGO_DATA_URL}" alt="Logo">` : ''}
-      <div class="attestation-titre-doc">${schoolName}</div>
-      <h1>${titre}</h1>
-      <div class="attestation-souslabel">Année scolaire ${anneeLib} — ${esc(trimestre)}</div>
-      <div class="attestation-ornement">✦ ✦ ✦</div>
-      <div class="attestation-texte">${introTexte}</div>
-      <div class="attestation-nom">${esc(el.nom)} ${esc(el.prenom)}</div>
-      <div class="attestation-texte">Élève (Sexe : <strong>${esc(el.sexe)||'—'}</strong>) en classe de <strong>${esc(el.classe)}</strong>,
-        ${esc(mentionObj?.texte || "pour son excellent travail")} au cours du ${esc(trimestre)} de l'année scolaire ${anneeLib}.</div>
-      ${blocMoyennes}
-      <div class="attestation-mention">${mentionFinale}</div>
-      ${attestationSceauSVG()}
-      <table class="signature-table">
-        <tr>
-          <td><div class="sig-label">Fait le ${today}</div></td>
-          <td style="text-align:right;"><div class="sig-label">Le ${esc(PARAMS.directeurTitre||'Directeur')}${directeurNom? ' : '+esc(directeurNom):''}</div><div class="sig-line" style="margin-left:auto;">Signature / Cachet</div></td>
-        </tr>
-      </table>
+      <div class="attestation-honneur-inner">
+        ${LOGO_DATA_URL ? `<img class="attestation-logo" src="${LOGO_DATA_URL}" alt="Logo">` : ''}
+        <div class="attestation-titre-doc">${schoolName}</div>
+        <h1>${titre}</h1>
+        <div class="attestation-souslabel">Année scolaire ${anneeLib} — ${esc(trimestre)}</div>
+        <div class="attestation-ornement">✦ ✦ ✦</div>
+        <div class="attestation-texte">${introTexte}</div>
+        <div class="attestation-nom">${esc(el.nom)} ${esc(el.prenom)}</div>
+        <div class="attestation-texte">Élève (Sexe : <strong>${esc(el.sexe)||'—'}</strong>) en classe de <strong>${esc(el.classe)}</strong>,
+          ${esc(mentionObj?.texte || "pour son excellent travail")} au cours du ${esc(trimestre)} de l'année scolaire ${anneeLib}.</div>
+        ${blocMoyennes}
+        <div class="attestation-mention">${mentionFinale}</div>
+        ${attestationSceauSVG()}
+        <table class="signature-table">
+          <tr>
+            <td><div class="sig-label">Fait le ${today}</div></td>
+            <td style="text-align:right;"><div class="sig-label">Le ${esc(PARAMS.directeurTitre||'Directeur')}${directeurNom? ' : '+esc(directeurNom):''}</div><div class="sig-line" style="margin-left:auto;">Signature / Cachet</div></td>
+          </tr>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -3963,23 +3978,25 @@ function buildAttestationReconnaissanceHTML(personnelId, motif){
       ${watermark}
       <div class="attestation-coin haut-gauche"></div><div class="attestation-coin haut-droit"></div>
       <div class="attestation-coin bas-gauche"></div><div class="attestation-coin bas-droit"></div>
-      ${LOGO_DATA_URL ? `<img class="attestation-logo" src="${LOGO_DATA_URL}" alt="Logo">` : ''}
-      <div class="attestation-titre-doc">${schoolName}</div>
-      <h1>Attestation de reconnaissance</h1>
-      <div class="attestation-souslabel">Année scolaire ${anneeLib}</div>
-      <div class="attestation-ornement">✦ ✦ ✦</div>
-      <div class="attestation-texte">${introTexte}</div>
-      <div class="attestation-nom">${esc(p.nom)} ${esc(p.prenom)}</div>
-      <div class="attestation-texte">${esc(p.fonction)}${p.matiere?' — '+esc(p.matiere):''} au sein de l'établissement,
-        ${esc(motif || "pour son engagement et la qualité de son travail durant l'année scolaire")} ${anneeLib}.</div>
-      <div class="attestation-mention">${mentionFinale}</div>
-      ${attestationSceauSVG()}
-      <table class="signature-table">
-        <tr>
-          <td><div class="sig-label">Fait le ${today}</div></td>
-          <td style="text-align:right;"><div class="sig-label">Le ${esc(PARAMS.directeurTitre||'Directeur')}${directeurNom? ' : '+esc(directeurNom):''}</div><div class="sig-line" style="margin-left:auto;">Signature / Cachet</div></td>
-        </tr>
-      </table>
+      <div class="attestation-honneur-inner">
+        ${LOGO_DATA_URL ? `<img class="attestation-logo" src="${LOGO_DATA_URL}" alt="Logo">` : ''}
+        <div class="attestation-titre-doc">${schoolName}</div>
+        <h1>Attestation de reconnaissance</h1>
+        <div class="attestation-souslabel">Année scolaire ${anneeLib}</div>
+        <div class="attestation-ornement">✦ ✦ ✦</div>
+        <div class="attestation-texte">${introTexte}</div>
+        <div class="attestation-nom">${esc(p.nom)} ${esc(p.prenom)}</div>
+        <div class="attestation-texte">${esc(p.fonction)}${p.matiere?' — '+esc(p.matiere):''} au sein de l'établissement,
+          ${esc(motif || "pour son engagement et la qualité de son travail durant l'année scolaire")} ${anneeLib}.</div>
+        <div class="attestation-mention">${mentionFinale}</div>
+        ${attestationSceauSVG()}
+        <table class="signature-table">
+          <tr>
+            <td><div class="sig-label">Fait le ${today}</div></td>
+            <td style="text-align:right;"><div class="sig-label">Le ${esc(PARAMS.directeurTitre||'Directeur')}${directeurNom? ' : '+esc(directeurNom):''}</div><div class="sig-line" style="margin-left:auto;">Signature / Cachet</div></td>
+          </tr>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -5647,14 +5664,49 @@ function fitBulletinHTML(html){
   return resultat;
 }
 
+// Réduit à l'échelle (transform:scale, pas seulement la police) le contenu de chaque
+// attestation d'honneur (.attestation-honneur-inner) contenue dans le HTML fourni, jusqu'à ce
+// qu'il tienne entièrement dans le cadre fixe de la page — quels que soient la longueur du nom
+// de l'élève/l'établissement ou des textes personnalisés dans Paramètres. transform:scale (et
+// non un simple ajustement de police comme pour le bulletin) est utilisé ici car la mise en page
+// mélange volontairement unités mm (cadre décoratif fixe) et px (texte) : mettre tout à
+// l'échelle d'un coup, plutôt que recalculer chaque taille individuellement, garantit qu'aucun
+// élément ne peut déborder, y compris les marges.
+function fitAttestationHTML(html){
+  if(!html.includes('attestation-honneur-inner')) return html;
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute; left:-9999px; top:0; visibility:hidden; width:277mm;';
+  probe.innerHTML = html;
+  document.body.appendChild(probe);
+
+  probe.querySelectorAll('.attestation-honneur').forEach(cadre=>{
+    const inner = cadre.querySelector('.attestation-honneur-inner');
+    if(!inner) return;
+    inner.style.transform = 'translate(-50%,-50%) scale(1)';
+    const echelle = Math.min(1, cadre.clientHeight/inner.scrollHeight, cadre.clientWidth/inner.scrollWidth);
+    if(echelle < 0.999){
+      // Plancher à 50% : au-delà, le texte deviendrait difficilement lisible — un contenu qui
+      // nécessiterait plus de réduction signale plutôt un texte personnalisé à raccourcir dans
+      // Paramètres. Le contenu ne déborde jamais, même dans ce cas extrême (juste plus petit).
+      inner.style.transform = `translate(-50%,-50%) scale(${Math.max(echelle,0.5).toFixed(3)})`;
+    }
+  });
+
+  const resultat = probe.innerHTML;
+  document.body.removeChild(probe);
+  return resultat;
+}
+
 function openPrint(html){
   html = fitBulletinHTML(html);
+  html = fitAttestationHTML(html);
   // Les fiches de paie annuelles (nombreuses colonnes mensuelles) et les emplois du temps
   // (une colonne par jour) tiennent bien mieux en paysage ; tous les autres documents restent
   // en portrait (format A4 standard). Le format de page (@page) est global à toute l'impression,
   // donc basculé dynamiquement selon le contenu à imprimer plutôt que fixé une fois pour toutes.
+  const estPaysage = html.includes('fiche-paie') || html.includes('emploi-temps-print') || html.includes('attestation-honneur');
   const orientStyle = document.getElementById('print-orientation-override');
-  if(orientStyle) orientStyle.textContent = (html.includes('fiche-paie') || html.includes('emploi-temps-print') || html.includes('attestation-honneur'))
+  if(orientStyle) orientStyle.textContent = estPaysage
     ? '@media print{ @page{ size:A4 landscape; margin:10mm; } }'
     : '';
   const root = document.getElementById('print-preview-root');
@@ -5669,7 +5721,7 @@ function openPrint(html){
         ${boutonPdf}
         <button class="btn small" id="print-preview-go" type="button">Imprimer</button>
       </div>
-      <div class="print-preview-page">${html}</div>
+      <div class="print-preview-page${estPaysage ? ' print-preview-page-large' : ''}">${html}</div>
     </div>`;
   const close = ()=>{ root.innerHTML=''; };
   document.getElementById('print-preview-close').addEventListener('click', close);
