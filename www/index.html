@@ -505,6 +505,17 @@
     body *{visibility:hidden;}
     #print-area, #print-area *{visibility:visible;}
     #print-area{display:block;position:absolute;left:0;top:0;width:100%;padding:14px;}
+    /* Attestations d'honneur (A4 paysage, cadre fixe 277mm x 186mm dans la zone imprimable de
+       277mm x 190mm) : le retrait de 14px de #print-area (utile pour les autres documents)
+       rétrécissait la zone de 7mm en largeur — le texte se réenroulait alors sur plus de lignes
+       que lors du calcul de fitAttestationHTML (fait pour 277mm) et débordait du cadre (signature
+       coupée) — et poussait le bas du cadre sur une 2e page. Ici : aucun retrait, hauteur bloquée
+       à celle du cadre, jamais de saut de page après. */
+    #print-area.print-area-honneur{padding:0;height:186mm;overflow:hidden;}
+    .attestation-honneur{
+      -webkit-print-color-adjust:exact; print-color-adjust:exact; /* fond crème et pastilles imprimés même sans l'option "Graphiques d'arrière-plan" */
+      break-after:avoid; page-break-after:avoid;
+    }
     .bulletin, .receipt, .certificat, .attestation, .attestation-honneur, .carte-scolaire, .carte-scolaire-paire, .cartes-grille{page-break-inside:avoid;}
     @page{ size:A4; margin:10mm; }
   }
@@ -5707,7 +5718,7 @@ function openPrint(html){
   const estPaysage = html.includes('fiche-paie') || html.includes('emploi-temps-print') || html.includes('attestation-honneur');
   const orientStyle = document.getElementById('print-orientation-override');
   if(orientStyle) orientStyle.textContent = estPaysage
-    ? '@media print{ @page{ size:A4 landscape; margin:10mm; } }'
+    ? '@page{ size:A4 landscape; margin:10mm; }'
     : '';
   const root = document.getElementById('print-preview-root');
   // Le bouton PDF natif n'apparaît que dans le build Electron (window.pdfAPI exposé par
@@ -5729,7 +5740,9 @@ function openPrint(html){
     if(e.target.id==='print-preview-backdrop') close();
   });
   document.getElementById('print-preview-go').addEventListener('click', ()=>{
-    document.getElementById('print-area').innerHTML = html;
+    const zoneImpression = document.getElementById('print-area');
+    zoneImpression.innerHTML = html;
+    zoneImpression.classList.toggle('print-area-honneur', html.includes('attestation-honneur'));
     window.print();
   });
   document.getElementById('print-preview-pdf')?.addEventListener('click', async (e)=>{
@@ -5741,9 +5754,20 @@ function openPrint(html){
       // l'application, un seul fichier) + le fragment à imprimer, pour que la fenêtre PDF
       // cachée du processus principal affiche exactement le même rendu que l'aperçu à l'écran.
       const stylesActuels = Array.from(document.querySelectorAll('style')).map(s=>s.outerHTML).join('\n');
-      const documentComplet = `<!DOCTYPE html><html><head><meta charset="utf-8">${stylesActuels}</head><body>${html}</body></html>`;
+      // Le CSS d'impression de l'application masque tout sauf #print-area (body *{visibility:hidden}) :
+      // dans ce document il n'y a pas de #print-area, donc sans les règles ci-dessous le PDF sortait
+      // entièrement blanc. On rend donc tout visible et on remet body en flux normal (il est en
+      // display:flex ; height:100% dans l'application).
+      const stylesExport = `<style>
+        @media print{
+          html{ height:auto !important; }
+          body.export-pdf{ display:block !important; height:auto !important; min-height:0 !important; background:#fff !important; }
+          body.export-pdf *{ visibility:visible !important; }
+        }
+      </style>`;
+      const documentComplet = `<!DOCTYPE html><html><head><meta charset="utf-8">${stylesActuels}${stylesExport}</head><body class="export-pdf">${html}</body></html>`;
       const nomFichier = 'document_' + new Date().toISOString().slice(0,10);
-      const resultat = await window.pdfAPI.exporterPDF(documentComplet, nomFichier);
+      const resultat = await window.pdfAPI.exporterPDF(documentComplet, nomFichier, { paysage: estPaysage });
       if(resultat?.erreur){ showToast("Erreur lors de l'export PDF"); console.error(resultat.erreur); }
       else if(!resultat?.annule) showToast('PDF enregistré : ' + resultat.chemin);
     } catch(err){
