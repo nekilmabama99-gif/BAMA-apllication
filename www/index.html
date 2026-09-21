@@ -347,7 +347,7 @@
   }
   .bulletin-pleine-page .bulletin-info-ligne{font-size:0.94em; margin:0 0 3px 0;}
   .bulletin-pleine-page .bulletin-table td, .bulletin-pleine-page .bulletin-table th{padding:0.26em 0.45em; font-size:0.92em;}
-  .bulletin-pleine-page .bulletin-table th{background:#f4f2ec;}
+  .bulletin-pleine-page .bulletin-table th{background:#f4f2ec; letter-spacing:0; padding-left:0.2em; padding-right:0.2em; overflow-wrap:normal;}
   .bulletin-pleine-page .bulletin-table{table-layout:fixed;}
   .bulletin-pleine-page .bulletin-table th:nth-child(1), .bulletin-pleine-page .bulletin-table td:nth-child(1){width:19%;}
   .bulletin-pleine-page .bulletin-table th:nth-child(2), .bulletin-pleine-page .bulletin-table td:nth-child(2){width:6%;}
@@ -401,7 +401,10 @@
     position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
     width:55%; opacity:0.09; z-index:0; pointer-events:none;
   }
-  .attestation > *{position:relative; z-index:1;}
+  /* :not(.attestation-watermark) — sinon cette règle (spécificité égale, placée après) écrasait le
+     position:absolute du filigrane : le logo devenait un bloc de 340 px dans le flux, poussait tout le
+     contenu vers le bas et la signature sortait de la page dès qu'un logo était défini. */
+  .attestation > *:not(.attestation-watermark){position:relative; z-index:1;}
   .attestation .doc-officiel{margin-bottom:2px;align-self:stretch;width:100%;}
   .attestation .doc-logo{max-width:62px;max-height:62px;margin:0 auto 2px auto;}
   .attestation-titre-doc{font-size:11px;letter-spacing:.35em;text-transform:uppercase;color:var(--gold);margin-top:16px;}
@@ -504,18 +507,28 @@
   @media print{
     body *{visibility:hidden;}
     #print-area, #print-area *{visibility:visible;}
-    #print-area{display:block;position:absolute;left:0;top:0;width:100%;padding:14px;}
-    /* Attestations d'honneur (A4 paysage, cadre fixe 277mm x 186mm dans la zone imprimable de
-       277mm x 190mm) : le retrait de 14px de #print-area (utile pour les autres documents)
-       rétrécissait la zone de 7mm en largeur — le texte se réenroulait alors sur plus de lignes
-       que lors du calcul de fitAttestationHTML (fait pour 277mm) et débordait du cadre (signature
-       coupée) — et poussait le bas du cadre sur une 2e page. Ici : aucun retrait, hauteur bloquée
-       à celle du cadre, jamais de saut de page après. */
-    #print-area.print-area-honneur{padding:0;height:186mm;overflow:hidden;}
-    .attestation-honneur{
-      -webkit-print-color-adjust:exact; print-color-adjust:exact; /* fond crème et pastilles imprimés même sans l'option "Graphiques d'arrière-plan" */
-      break-after:avoid; page-break-after:avoid;
+    /* La marge de la feuille est déjà donnée par @page (10mm). L'ancien retrait supplémentaire de 14px
+       autour de la zone d'impression réduisait la largeur utile de 7mm et repoussait le contenu de
+       3,7mm vers le bas : les documents à dimensions fixes (attestations d'honneur, planches de
+       billets) débordaient alors de la page (contenu coupé, page blanche en plus), et les textes
+       se réenroulaient différemment de ce qui avait été mesuré à l'écran avant impression. */
+    /* L'application (menu latéral, onglets, fenêtres) n'était masquée que par visibility:hidden : elle
+       restait dans la mise en page et son débordement horizontal (menu, tableaux larges de l'onglet d'où
+       l'on imprime) forçait Chromium à réduire tout le document pour le faire tenir en largeur — cartes
+       scolaires imprimées à 80 mm au lieu de 85,6 mm, échelle variable selon l'onglet, pages en trop ou
+       en moins. On la retire de la mise en page (display:none) et la zone d'impression passe en flux
+       normal. body.export-pdf = document autonome de l'export PDF (voir openPrint), qui n'a pas d'appli. */
+    body:not(.export-pdf) > *:not(#print-area){display:none !important;}
+    html, body:not(.export-pdf){display:block !important;height:auto !important;min-height:0 !important;}
+    #print-area{display:block;position:static;width:100%;padding:0;}
+    /* Un tableau plus large que la page était rogné à droite (colonne « Statut » de la liste des
+       élèves, « Motif » de la feuille d'appel…) parce que .table-wrap défile à l'écran mais coupe
+       à l'impression. Ici il ne coupe plus ; fitTablesHTML() ajuste en plus la largeur avant impression. */
+    .table-wrap{overflow:visible !important; max-height:none !important;}
+    .attestation-honneur, .carte-scolaire, .carte-scolaire-paire{
+      -webkit-print-color-adjust:exact; print-color-adjust:exact; /* fonds (crème, bleu marine des cartes) imprimés même si l'option d'impression des arrière-plans est décochée : sans cela le texte blanc des cartes disparaissait sur le papier */
     }
+    .attestation-honneur{ break-after:avoid; page-break-after:avoid; }
     .bulletin, .receipt, .certificat, .attestation, .attestation-honneur, .carte-scolaire, .carte-scolaire-paire, .cartes-grille{page-break-inside:avoid;}
     @page{ size:A4; margin:10mm; }
   }
@@ -569,7 +582,7 @@
 
   .billets-page{
     display:grid; grid-template-columns:1fr 1fr; grid-template-rows:repeat(4,1fr);
-    gap:4mm; page-break-after:always; height:277mm;
+    gap:4mm; page-break-after:always; height:275mm;
   }
   .billets-page:last-child{page-break-after:auto;}
   .billet{
@@ -5708,6 +5721,39 @@ function fitAttestationHTML(html){
   return resultat;
 }
 
+// Ajuste à la largeur de la page tout tableau plus large que la zone imprimable (190mm en portrait,
+// 277mm en paysage), en réduisant proportionnellement sa taille (propriété CSS zoom : la mise en page
+// est recalculée, contrairement à transform:scale, donc la pagination reste correcte). Sans cela, un
+// tableau à beaucoup de colonnes (liste des élèves avec contact et statut, feuille d'appel, fiche
+// récapitulative de classe) était rogné sur le bord droit de la feuille. La mesure est faite à la
+// largeur exacte d'impression, avant que le HTML ne soit affiché ou envoyé à l'impression.
+function fitTablesHTML(html, paysage){
+  if(!html.includes('<table')) return html;
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:absolute; left:-9999px; top:0; visibility:hidden; width:' + (paysage ? 277 : 190) + 'mm;';
+  probe.innerHTML = html;
+  document.body.appendChild(probe);
+
+  probe.querySelectorAll('table').forEach(t=>{
+    if(t.parentElement && t.parentElement.closest('table')) return; // tableau imbriqué : suit son tableau parent
+    if(t.closest('.attestation-honneur, .carte-scolaire, .billet, .signature-table')) return; // mises en page à dimensions fixes
+    const parent = t.parentElement;
+    if(!parent) return;
+    const cs = getComputedStyle(parent);
+    const dispo = parent.clientWidth - (parseFloat(cs.paddingLeft)||0) - (parseFloat(cs.paddingRight)||0);
+    const besoin = Math.max(t.offsetWidth, t.scrollWidth);
+    if(dispo > 0 && besoin > dispo + 1){
+      // Plancher à 55 % : en dessous le texte devient illisible ; le tableau ne sera alors plus
+      // rogné (voir .table-wrap en @media print) mais réduit par le navigateur.
+      t.style.zoom = Math.max(0.55, (dispo/besoin)*0.99).toFixed(3); // 1 % de marge contre les arrondis
+    }
+  });
+
+  const resultat = probe.innerHTML;
+  document.body.removeChild(probe);
+  return resultat;
+}
+
 function openPrint(html){
   html = fitBulletinHTML(html);
   html = fitAttestationHTML(html);
@@ -5716,6 +5762,7 @@ function openPrint(html){
   // en portrait (format A4 standard). Le format de page (@page) est global à toute l'impression,
   // donc basculé dynamiquement selon le contenu à imprimer plutôt que fixé une fois pour toutes.
   const estPaysage = html.includes('fiche-paie') || html.includes('emploi-temps-print') || html.includes('attestation-honneur');
+  html = fitTablesHTML(html, estPaysage);
   const orientStyle = document.getElementById('print-orientation-override');
   if(orientStyle) orientStyle.textContent = estPaysage
     ? '@page{ size:A4 landscape; margin:10mm; }'
@@ -5740,9 +5787,7 @@ function openPrint(html){
     if(e.target.id==='print-preview-backdrop') close();
   });
   document.getElementById('print-preview-go').addEventListener('click', ()=>{
-    const zoneImpression = document.getElementById('print-area');
-    zoneImpression.innerHTML = html;
-    zoneImpression.classList.toggle('print-area-honneur', html.includes('attestation-honneur'));
+    document.getElementById('print-area').innerHTML = html;
     window.print();
   });
   document.getElementById('print-preview-pdf')?.addEventListener('click', async (e)=>{
