@@ -102,6 +102,28 @@ de sauvegarde/export déjà présente dans l'app (`exportBackup`) si tu veux
 transférer les données d'un appareil à un autre, ou en garder une copie de
 sécurité.
 
+## Impression (depuis cette version)
+
+`www/index.html` utilise maintenant le plugin `@capgo/capacitor-printer` pour
+imprimer sur Android/iOS : `window.print()`, utilisé auparavant, n'a aucun
+effet dans la WebView de l'app (contrairement à Electron ou à un navigateur),
+ce qui empêchait toute impression. **Avant de compiler**, installe le plugin :
+
+```
+npm install @capgo/capacitor-printer
+npx cap sync android
+```
+
+Ce projet est actuellement en Capacitor 6 (`@capacitor/android` ^6.1.0). Si
+`npm install` signale un conflit de version (`ERESOLVE`), c'est que ce plugin
+exige Capacitor 7 : dans ce cas, mets à jour d'abord `@capacitor/core`,
+`@capacitor/android` et `@capacitor/cli` vers `^7`, relance `npx cap sync
+android`, teste que le reste de l'app fonctionne toujours (aucun changement
+volontaire ne dépend ici de Capacitor 7, mais une montée de version majeure
+peut avoir d'autres effets de bord), puis installe le plugin. N'a pas pu être
+vérifié ici faute d'accès réseau — dis-moi ce que `npm install` répond si un
+conflit apparaît, je regarde avec toi.
+
 ## Mettre à jour l'application plus tard
 
 Remplace `www/index.html` par la nouvelle version, puis relance la
