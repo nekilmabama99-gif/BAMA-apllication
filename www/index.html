@@ -5754,6 +5754,24 @@ function fitTablesHTML(html, paysage){
   return resultat;
 }
 
+// Document HTML autonome (tous les <style> de la page actuelle + le fragment à imprimer), utilisé
+// à la fois par l'export PDF Electron et par l'impression native Android/iOS (plugin Printer,
+// voir openPrint) : dans les deux cas le document est rendu hors de l'application (fenêtre PDF
+// cachée côté Electron, WebView isolée du plugin côté Android/iOS), donc sans #print-area — le
+// CSS d'impression qui masque tout sauf #print-area (body *{visibility:hidden}) doit donc être
+// neutralisé ici, sans quoi le résultat serait entièrement blanc.
+function construireDocumentImpressionAutonome(html){
+  const stylesActuels = Array.from(document.querySelectorAll('style')).map(s=>s.outerHTML).join('\n');
+  const stylesExport = `<style>
+    @media print{
+      html{ height:auto !important; }
+      body.export-pdf{ display:block !important; height:auto !important; min-height:0 !important; background:#fff !important; }
+      body.export-pdf *{ visibility:visible !important; }
+    }
+  </style>`;
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">${stylesActuels}${stylesExport}</head><body class="export-pdf">${html}</body></html>`;
+}
+
 function openPrint(html){
   html = fitBulletinHTML(html);
   html = fitAttestationHTML(html);
@@ -5786,7 +5804,31 @@ function openPrint(html){
   document.getElementById('print-preview-backdrop').addEventListener('click', (e)=>{
     if(e.target.id==='print-preview-backdrop') close();
   });
-  document.getElementById('print-preview-go').addEventListener('click', ()=>{
+  document.getElementById('print-preview-go').addEventListener('click', async (e)=>{
+    // window.print() n'a aucun effet dans la WebView Android/iOS de Capacitor (contrairement à
+    // Electron ou à un navigateur) : aucune boîte de dialogue d'impression système n'existe pour
+    // l'intercepter. Sur ces plateformes, on passe donc par le plugin Printer natif, qui rend le
+    // document dans sa propre WebView isolée puis ouvre l'impression système Android/iOS
+    // (PrintManager / UIPrintInteractionController) — le même mécanisme que l'export PDF Electron,
+    // avec construireDocumentImpressionAutonome pour fournir un document autonome équivalent.
+    const printerNatif = window.Capacitor?.isNativePlatform?.() && window.Capacitor?.Plugins?.Printer;
+    if(printerNatif){
+      const bouton = e.currentTarget;
+      const texteInitial = bouton.textContent;
+      bouton.disabled = true; bouton.textContent = 'Préparation…';
+      try{
+        const documentComplet = construireDocumentImpressionAutonome(html);
+        await printerNatif.printHtml({ name: 'document_' + new Date().toISOString().slice(0,10), html: documentComplet });
+      } catch(err){
+        // Le rejet peut simplement correspondre à une annulation de la boîte de dialogue système
+        // par l'utilisateur (comportement non standardisé selon les versions d'Android/iOS) : pas
+        // d'alerte affichée pour ce cas courant, seulement une trace dans la console pour le support.
+        console.error(err);
+      } finally {
+        bouton.disabled = false; bouton.textContent = texteInitial;
+      }
+      return;
+    }
     document.getElementById('print-area').innerHTML = html;
     window.print();
   });
@@ -5795,22 +5837,9 @@ function openPrint(html){
     const texteInitial = bouton.textContent;
     bouton.disabled = true; bouton.textContent = 'Génération…';
     try{
-      // Document HTML autonome : tous les <style> de la page en cours (le CSS complet de
-      // l'application, un seul fichier) + le fragment à imprimer, pour que la fenêtre PDF
-      // cachée du processus principal affiche exactement le même rendu que l'aperçu à l'écran.
-      const stylesActuels = Array.from(document.querySelectorAll('style')).map(s=>s.outerHTML).join('\n');
-      // Le CSS d'impression de l'application masque tout sauf #print-area (body *{visibility:hidden}) :
-      // dans ce document il n'y a pas de #print-area, donc sans les règles ci-dessous le PDF sortait
-      // entièrement blanc. On rend donc tout visible et on remet body en flux normal (il est en
-      // display:flex ; height:100% dans l'application).
-      const stylesExport = `<style>
-        @media print{
-          html{ height:auto !important; }
-          body.export-pdf{ display:block !important; height:auto !important; min-height:0 !important; background:#fff !important; }
-          body.export-pdf *{ visibility:visible !important; }
-        }
-      </style>`;
-      const documentComplet = `<!DOCTYPE html><html><head><meta charset="utf-8">${stylesActuels}${stylesExport}</head><body class="export-pdf">${html}</body></html>`;
+      // Document HTML autonome (voir construireDocumentImpressionAutonome), pour que la fenêtre
+      // PDF cachée du processus principal Electron affiche exactement le même rendu que l'aperçu.
+      const documentComplet = construireDocumentImpressionAutonome(html);
       const nomFichier = 'document_' + new Date().toISOString().slice(0,10);
       const resultat = await window.pdfAPI.exporterPDF(documentComplet, nomFichier, { paysage: estPaysage });
       if(resultat?.erreur){ showToast("Erreur lors de l'export PDF"); console.error(resultat.erreur); }
