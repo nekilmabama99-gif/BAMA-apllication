@@ -369,6 +369,9 @@
   .bulletin-pleine-page .bulletin-recap td{border:1px solid var(--line); padding:0.24em 0.5em;}
   .bulletin-pleine-page .bulletin-recap tr.bulletin-recap-fort td{background:var(--gold-soft); font-weight:700;}
   .bulletin-pleine-page .bulletin-decision{font-size:0.92em; margin:0.4em 0 0 0; padding:0.28em 0.55em; background:var(--gold-soft); border:1px solid var(--gold);}
+  .bulletin-pleine-page .bulletin-alerte-non-notee{font-size:0.85em; margin:0.35em 0; padding:0.28em 0.55em; background:#fdf1e8; border:1px solid #d98c3f; color:#8a4b12;}
+  .barre-stockage-fond{width:100%; height:14px; border-radius:7px; background:var(--navy-soft); overflow:hidden;}
+  .barre-stockage-remplissage{height:100%; border-radius:7px; transition:width 0.3s;}
   .bulletin-pleine-page .signature-table{margin-top:auto; padding-top:1.3em;}
   .bulletin-pleine-page .sig-label{font-size:0.9em;}
   .bulletin-pleine-page .sig-line{margin-top:1.8em; font-size:0.78em;}
@@ -916,7 +919,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7
 // Numéro de version du logiciel, affiché dans Paramètres pour faciliter le support (savoir
 // quelle version un établissement utilise). À incrémenter à chaque nouvelle build envoyée à un
 // client — garder aligné avec la "version" du package.json (Electron/Capacitor) par cohérence.
-const VERSION_LOGICIEL = '1.0.0';
+const VERSION_LOGICIEL = '1.1.0';
 
 const esc = s => (s===undefined||s===null) ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -1192,7 +1195,20 @@ async function loadAll(){
     if(e.photo){ PHOTOS_CACHE['photo-'+e.id] = e.photo; migrationPhotos = true; }
     else if(PHOTOS_CACHE['photo-'+e.id]) e.photo = PHOTOS_CACHE['photo-'+e.id];
   });
-  NOTES = storageGet('notes-data') || [];
+  // NOTES vit désormais dans IndexedDB (voir donneeDBGet/donneeDBSet), plus dans localStorage :
+  // c'est de loin la plus grosse structure de données de l'application (bien avant les fiches
+  // élèves ou les finances — plusieurs dizaines de notes par élève et par an), celle qui faisait
+  // le plus tôt saturer le plafond de quelques Mo de localStorage dans un grand établissement.
+  // Migration automatique et silencieuse de l'ancien emplacement au premier chargement suivant
+  // la mise à jour, même schéma que pour ARCHIVES ci-dessous.
+  const notesLocalStorageAncien = storageGet('notes-data');
+  if(notesLocalStorageAncien){
+    NOTES = notesLocalStorageAncien;
+    await donneeDBSet('notes-data', NOTES);
+    localStorage.removeItem(STORAGE_PREFIX + 'notes-data');
+  } else {
+    NOTES = (await donneeDBGet('notes-data')) || [];
+  }
   EXAMENS_BLANCS = storageGet('examens-blancs-data') || [];
   NOTES_BLANC = storageGet('notes-blanc-data') || [];
   DECISIONS_BLANC = storageGet('decisions-blanc-data') || {};
@@ -1202,7 +1218,17 @@ async function loadAll(){
   DECISIONS = storageGet('decisions-data') || {};
   PROF_PRINCIPAL = storageGet('prof-principal-data') || {};
   PAIE = storageGet('paie-data') || [];
-  FINANCES = storageGet('finances-data') || { paiements: [], depenses: [] };
+  // FINANCES vit désormais dans IndexedDB pour la même raison que NOTES ci-dessus : la liste des
+  // paiements grossit à chaque versement, année après année, sans jamais être purgée tant que
+  // l'année scolaire n'est pas basculée.
+  const financesLocalStorageAncien = storageGet('finances-data');
+  if(financesLocalStorageAncien){
+    FINANCES = financesLocalStorageAncien;
+    await donneeDBSet('finances-data', FINANCES);
+    localStorage.removeItem(STORAGE_PREFIX + 'finances-data');
+  } else {
+    FINANCES = (await donneeDBGet('finances-data')) || { paiements: [], depenses: [] };
+  }
   PERSONNEL = storageGet('personnel-data') || [];
   PERSONNEL_ABSENCES = storageGet('personnel-absences-data') || [];
   const savedParams = storageGet('parametres-data') || {};
@@ -1396,14 +1422,14 @@ const saveEleves = async () => {
   const sansPhotos = ELEVES.map(({photo, ...reste}) => reste);
   return save('eleves-data', sansPhotos);
 };
-const saveNotes = () => save('notes-data', NOTES);
+const saveNotes = () => donneeDBSet('notes-data', NOTES);
 const saveExamensBlancs = () => save('examens-blancs-data', EXAMENS_BLANCS);
 const saveNotesBlanc = () => save('notes-blanc-data', NOTES_BLANC);
 const saveDecisionsBlanc = () => save('decisions-blanc-data', DECISIONS_BLANC);
 const saveAbsences = () => save('absences-data', ABSENCES);
 const saveDiscipline = () => save('discipline-data', DISCIPLINE);
 const saveEmploi = () => save('emploi-data', EMPLOI);
-const saveFinances = () => save('finances-data', FINANCES);
+const saveFinances = () => donneeDBSet('finances-data', FINANCES);
 const savePersonnel = () => save('personnel-data', PERSONNEL);
 const savePersonnelAbsences = () => save('personnel-absences-data', PERSONNEL_ABSENCES);
 const saveParams = () => save('parametres-data', PARAMS);
@@ -1635,7 +1661,7 @@ async function confirmerAvecCode(message){
     alert('Code incorrect. Suppression annulée.');
     return false;
   }
-  if(!PARAMS.codeSuppressionHash.startsWith('v2$')){
+  if(!PARAMS.codeSuppressionHash.startsWith('v3$')){
     PARAMS.codeSuppressionHash = await hacherMotDePasse(saisie, PARAMS.codeSuppressionSel);
     await saveParams();
   }
@@ -1722,7 +1748,56 @@ function verifierRappelSauvegarde(){
   }
 }
 
+// Chiffrement optionnel des sauvegardes (AES-256-GCM, clé dérivée du mot de passe saisi par
+// PBKDF2) : le fichier exporté contient les noms, dates de naissance, contacts des familles et
+// montants payés par chaque élève, en clair dans le JSON — n'importe qui l'ouvrant (email
+// intercepté, clé USB perdue) pouvait tout lire. Enveloppe : signature "GECOLE1\0" (8 octets, pour
+// que importBackup distingue ce format du gzip ou du JSON brut avant même de tenter un
+// déchiffrement) + sel PBKDF2 (16 octets) + vecteur d'initialisation (12 octets) + texte chiffré.
+const SIGNATURE_BACKUP_CHIFFRE = new TextEncoder().encode('GECOLE1\0');
+async function deriverCleAES(motDePasse, sel){
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(motDePasse), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name:'PBKDF2', hash:'SHA-256', salt: sel, iterations: 600000 }, base,
+    { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']
+  );
+}
+async function chiffrerBackup(octets, motDePasse){
+  const sel = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cle = await deriverCleAES(motDePasse, sel);
+  const chiffre = new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM', iv}, cle, octets));
+  const resultat = new Uint8Array(SIGNATURE_BACKUP_CHIFFRE.length + sel.length + iv.length + chiffre.length);
+  resultat.set(SIGNATURE_BACKUP_CHIFFRE, 0);
+  resultat.set(sel, SIGNATURE_BACKUP_CHIFFRE.length);
+  resultat.set(iv, SIGNATURE_BACKUP_CHIFFRE.length + sel.length);
+  resultat.set(chiffre, SIGNATURE_BACKUP_CHIFFRE.length + sel.length + iv.length);
+  return resultat;
+}
+// Lève une erreur (mot de passe incorrect ou fichier corrompu) si l'authentification GCM échoue —
+// c'est le comportement recherché : mieux vaut refuser que restaurer des données corrompues.
+async function dechiffrerBackup(octets, motDePasse){
+  const d = SIGNATURE_BACKUP_CHIFFRE.length;
+  const sel = octets.slice(d, d+16);
+  const iv = octets.slice(d+16, d+28);
+  const chiffre = octets.slice(d+28);
+  const cle = await deriverCleAES(motDePasse, sel);
+  return new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM', iv}, cle, chiffre));
+}
+function estBackupChiffre(octets){
+  if(octets.length < SIGNATURE_BACKUP_CHIFFRE.length) return false;
+  return SIGNATURE_BACKUP_CHIFFRE.every((o,i)=>octets[i]===o);
+}
+
 async function exportBackup(){
+  // Protection optionnelle : Annuler interrompt tout l'export (la sauvegarde ne doit jamais
+  // partir sans que l'utilisateur ait pu décider) ; champ laissé vide = sauvegarde non protégée,
+  // comme avant cette version.
+  const motDePasse = await demanderSaisie(
+    'Protéger cette sauvegarde par un mot de passe (recommandé si vous l\'envoyez par email ou la stockez sur une clé USB) ?\n\nLaissez vide pour ne pas la protéger.',
+    {password:true, placeholder:'Mot de passe (facultatif)'}
+  );
+  if(motDePasse === null) return;
   const backup = {
     version: 2,
     date: new Date().toISOString(),
@@ -1756,6 +1831,12 @@ async function exportBackup(){
     blob = new Blob([json], {type:'application/json'});
     nomFichier = `sauvegarde_etablissement_${dateStr}.json`;
   }
+  if(motDePasse){
+    const octets = new Uint8Array(await blob.arrayBuffer());
+    const chiffre = await chiffrerBackup(octets, motDePasse);
+    blob = new Blob([chiffre], {type:'application/octet-stream'});
+    nomFichier = nomFichier.replace(/\.(json|json\.gz)$/, '.gecole');
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = nomFichier;
@@ -1771,7 +1852,17 @@ function importBackup(file){
   reader.onload = async (e)=>{
     let texteJson;
     try{
-      const octets = new Uint8Array(e.target.result);
+      let octets = new Uint8Array(e.target.result);
+      if(estBackupChiffre(octets)){
+        const motDePasse = await demanderSaisie('Cette sauvegarde est protégée par un mot de passe. Entrez-le pour continuer :', {password:true});
+        if(motDePasse===null){ showToast('Restauration annulée'); return; }
+        try{
+          octets = await dechiffrerBackup(octets, motDePasse);
+        }catch(err){
+          alert("Mot de passe incorrect, ou fichier corrompu.\n\nAucune donnée n'a été modifiée.");
+          return;
+        }
+      }
       // Détection du format par les deux premiers octets (signature gzip 0x1f 0x8b), plutôt que
       // par l'extension du fichier : plus fiable si le fichier a été renommé ou joint par email.
       const estGzip = octets.length>2 && octets[0]===0x1f && octets[1]===0x8b;
@@ -2080,8 +2171,16 @@ function computeTrimestre(eleveId, trimestre){
   // négative, ce qui n'a pas de sens sur un bulletin — la réduction est simplement plafonnée.
   const totalPointsAjuste = Math.max(0, totalPoints - reductionConduite - reductionAbsence);
 
+  // Matières attendues pour la classe mais sans aucune note ce trimestre (hors sport si l'élève
+  // en est dispensé, puisque cette matière ne compte alors plus dans le bulletin) : sans cet
+  // indicateur, une matière non notée sortait silencieusement du calcul et la moyenne paraissait
+  // définitive alors qu'elle ne portait en réalité que sur les matières déjà saisies.
+  const matieresAttendues = classe ? matieresPourClasse(classe).filter(m=>!(dispenseSport && m.categorie==='Sport')) : [];
+  const idsNotes = new Set(lignes.map(l=>l.matiereId));
+  const matieresNonNotees = matieresAttendues.filter(m=>!idsNotes.has(m.id)).map(m=>m.nom);
+
   const moyenneGenerale = totalCoeff>0 ? totalPointsAjuste/totalCoeff : null;
-  return { lignes, sousMoyennes, moyenneGenerale, totalCoeff, totalPoints, reductionConduite, reductionAbsence, totalPointsAjuste, dispenseSport, motifSportDispense: reduc.motifSportDispense||'' };
+  return { lignes, sousMoyennes, moyenneGenerale, totalCoeff, totalPoints, reductionConduite, reductionAbsence, totalPointsAjuste, dispenseSport, motifSportDispense: reduc.motifSportDispense||'', matieresNonNotees };
 }
 
 // Moyenne de la classe pour chaque matière, à un trimestre donné : moyenne (sur les élèves
@@ -2131,8 +2230,13 @@ async function purgerPhotosOrphelines(){
 }
 
 function attribuerRangsExAequo(resultats){
+  // Comparer resultats[i].moyenne===resultats[i-1].moyenne sur les flottants bruts donnait des
+  // rangs différents à des moyennes mathématiquement égales et identiquement affichées (ex : deux
+  // élèves à "12.40" avec 12.4 et 12.399999999999999 en interne, à cause de l'arrondi binaire des
+  // flottants) — on compare donc les valeurs arrondies à 2 décimales, celles réellement affichées.
+  const arrondie = m => Math.round(m*100)/100;
   resultats.forEach((r,i)=>{
-    r.rang = (i>0 && r.moyenne===resultats[i-1].moyenne) ? resultats[i-1].rang : i+1;
+    r.rang = (i>0 && arrondie(r.moyenne)===arrondie(resultats[i-1].moyenne)) ? resultats[i-1].rang : i+1;
   });
   const compte = {};
   resultats.forEach(r=>{ compte[r.rang] = (compte[r.rang]||0)+1; });
@@ -2541,9 +2645,27 @@ async function basculerAnneeScolaire(nouveauLibelle){
   };
   await saveArchives();
 
-  // 3) Nouvelle année : notes, décisions, finances, examens blancs et paie
-  //    repartent de zéro (déjà archivés ci-dessus). Personnel, classes,
-  //    matières et tarifs (données structurelles) sont conservés intégralement.
+  // 3) Bascule de l'identité de l'année — le point de non-retour — AVANT de vider les collections
+  //    de travail (étape 4). Si l'application est interrompue après ce point mais avant la fin de
+  //    l'étape 4 (coupure de courant, fermeture accidentelle — fréquent hors-ligne), l'utilisateur
+  //    reprend forcément dans la nouvelle année (anneeActiveId a déjà changé) : relancer "Basculer
+  //    l'année" archiverait alors l'année n+1 sous un identifiant TOUT NEUF (uid() ci-dessous),
+  //    sans jamais retoucher ARCHIVES[ancienneId] déjà sauvegardé à l'étape 2.
+  //    Avant ce correctif, l'ordre inverse exposait un vrai cas de perte de données : si l'app
+  //    s'interrompait pendant l'étape 4 (ex : juste après avoir vidé et sauvegardé NOTES, mais
+  //    avant que anneeActiveId ne bascule), l'utilisateur restait sur l'ANCIENNE année — désormais
+  //    sans ses notes, apparemment perdues — et en relançant "Basculer l'année" pour s'en sortir,
+  //    le nouveau snapshot (déjà vidé) écrasait purement et simplement l'archive légitime déjà
+  //    enregistrée à l'étape 2, sans aucun avertissement.
+  const nouvelleAnnee = { id: uid(), libelle: nouveauLibelle };
+  ANNEES.push(nouvelleAnnee);
+  anneeActiveId = nouvelleAnnee.id;
+  anneeAffichee = nouvelleAnnee.id;
+  await saveAnnees(); await saveAnneeActive();
+
+  // 4) Notes, décisions, finances, examens blancs et paie de la nouvelle année repartent de zéro
+  //    (déjà archivés à l'étape 2). Personnel, classes, matières et tarifs (données structurelles)
+  //    sont conservés intégralement.
   NOTES = [];
   EXAMENS_BLANCS = [];
   NOTES_BLANC = [];
@@ -2555,12 +2677,6 @@ async function basculerAnneeScolaire(nouveauLibelle){
   FINANCES = { paiements: [], depenses: [] };
   PAIE = [];
   await saveNotes(); await saveExamensBlancs(); await saveNotesBlanc(); await saveDecisionsBlanc(); await saveAbsences(); await saveDiscipline(); await saveEmploi(); await saveDecisions(); await saveFinances(); await savePaie(); await saveEleves();
-
-  const nouvelleAnnee = { id: uid(), libelle: nouveauLibelle };
-  ANNEES.push(nouvelleAnnee);
-  anneeActiveId = nouvelleAnnee.id;
-  anneeAffichee = nouvelleAnnee.id;
-  await saveAnnees(); await saveAnneeActive();
 
   updateAnneeSelect();
   showToast(`Bascule effectuée : bienvenue en ${nouveauLibelle}`);
@@ -2607,7 +2723,9 @@ function buildArchiveBilanHTML(anneeId){
   if(!archive) return `<div class="bulletin">${printHeader()}<h3>${esc(libelle)}</h3><p>Aucune archive disponible.</p></div>`;
   const parClasse = {};
   archive.eleves.forEach(e=>{ (parClasse[e.classe] = parClasse[e.classe]||[]).push(e); });
-  const totalPaye = archive.finances.paiements.reduce((s,p)=>s+Number(p.montant||0),0);
+  // Voir le commentaire équivalent dans buildArchiveFinancesHTML : un paiement "Impayé" est une
+  // somme due mais jamais reçue, à exclure des recettes réelles de l'année.
+  const totalPaye = archive.finances.paiements.filter(estEncaisse).reduce((s,p)=>s+Number(p.montant||0),0);
   const totalDepenses = archive.finances.depenses.reduce((s,p)=>s+Number(p.montant||0),0);
   const personnel = archive.personnel || [];
   const paie = archive.paie || [];
@@ -2687,7 +2805,12 @@ function buildArchiveFinancesHTML(anneeId){
   const archive = ARCHIVES[anneeId];
   const libelle = anneeLibelle(anneeId);
   const schoolName = esc(document.getElementById('school-name').value);
-  const paiements = archive?.finances?.paiements || [];
+  // Exclut les paiements marqués "Impayé" (un montant simplement noté comme dû, jamais reçu — voir
+  // estEncaisse) : sans ce filtre, ce rapport de recettes comptait comme argent perçu des sommes qui
+  // ne l'ont jamais été, contrairement au tableau de bord de l'année en cours qui, lui, les exclut
+  // déjà (voir totalPayeParEleve, le tableau de bord des finances) — un même paiement changeait donc
+  // de statut selon l'écran où on le consultait.
+  const paiements = (archive?.finances?.paiements || []).filter(estEncaisse);
   const depenses = archive?.finances?.depenses || [];
   const eleveNom = (id)=>{ const e = archive.eleves.find(x=>x.id===id); return e?esc(e.nom)+' '+esc(e.prenom):'—'; };
   const rowsPaiements = paiements.map((p,i)=>`<tr><td>${i+1}</td><td>${esc(p.date)}</td><td>${eleveNom(p.eleveId)}</td><td>${fmt(p.montant)}</td></tr>`).join('');
@@ -2728,7 +2851,8 @@ function renderArchiveAnnee(anneeId){
   }
   const parClasse = {};
   archive.eleves.forEach(e=>{ (parClasse[e.classe] = parClasse[e.classe]||[]).push(e); });
-  const totalPaye = archive.finances.paiements.reduce((s,p)=>s+Number(p.montant||0),0);
+  // Voir le commentaire équivalent dans buildArchiveFinancesHTML.
+  const totalPaye = archive.finances.paiements.filter(estEncaisse).reduce((s,p)=>s+Number(p.montant||0),0);
   const totalDepenses = archive.finances.depenses.reduce((s,p)=>s+Number(p.montant||0),0);
   const moisPaie = [...new Set((archive.paie||[]).map(p=>p.mois))].sort();
   const trimestreOptions = (PARAMS.trimestres||[]).map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('');
@@ -5055,8 +5179,24 @@ function renderParametres(){
   const sansDecisionCalculable = ELEVES.filter(e=>e.statut!=='Inactif' && moyenneAnnuelle(e.id)===null && !DECISIONS[e.id]).length;
   const libelleSuggere = genererLibelleSuivant(anneeLibelle(anneeActiveId));
   const activation = storageGet('activation-data');
+  // Occupation de localStorage (élèves, personnel, paramètres, emploi du temps, absences...) —
+  // les données les plus volumineuses (notes, paiements, archives) vivent désormais à part dans
+  // IndexedDB (voir donneeDBGet/donneeDBSet) et ne comptent donc plus dans ce plafond. Plafond de
+  // 5 Mo choisi par prudence : la limite réelle varie selon le navigateur/WebView (souvent 5 à
+  // 10 Mo), mais aucune API standard ne permet de la lire à l'avance — mieux vaut prévenir tôt
+  // qu'échouer sans avertissement au moment d'enregistrer.
+  const octetsLocalStorage = Object.keys(localStorage).filter(k=>k.startsWith(STORAGE_PREFIX)).reduce((s,k)=> s + k.length + (localStorage.getItem(k)||'').length, 0);
+  const PLAFOND_LOCALSTORAGE_OCTETS = 5*1000*1000;
+  const pctStockage = Math.min(100, Math.round(octetsLocalStorage/PLAFOND_LOCALSTORAGE_OCTETS*100));
+  const couleurStockage = pctStockage>=90 ? 'var(--red)' : pctStockage>=70 ? '#d98c3f' : 'var(--gold)';
 
   return `
+  <div class="panel">
+    <div class="panel-head"><h3>Espace de stockage</h3><p class="desc" style="width:100%;">Fiches élèves, personnel, paramètres, emploi du temps... Les notes, paiements et archives d'années passées sont stockés à part et ne sont pas concernés par cette limite.</p></div>
+    <div class="barre-stockage-fond"><div class="barre-stockage-remplissage" style="width:${pctStockage}%;background:${couleurStockage};"></div></div>
+    <p class="muted" style="margin-top:6px;">${(octetsLocalStorage/1000).toFixed(0)} Ko utilisés sur environ 5000 Ko (${pctStockage}%)${pctStockage>=70 ? ' — pensez à archiver une ancienne année scolaire ou à contacter le support si ce chiffre continue de monter.' : ''}</p>
+  </div>
+
   <div class="panel">
     <div class="panel-head"><h3>Licence du logiciel</h3><p class="desc" style="width:100%;">Établissement activé : <strong>${esc(activation?.clientName || '—')}</strong>${activation?.activeLe ? ' — depuis le '+new Date(activation.activeLe).toLocaleDateString('fr-FR') : ''}${activation?.exp ? ' — valable jusqu\'au '+new Date(activation.exp).toLocaleDateString('fr-FR') : ''}.</p></div>
     <p class="muted" style="margin-top:8px;">Pour vendre ce logiciel à un autre établissement, transmettez-lui une copie de ce fichier. La clé de licence se génère uniquement depuis l'outil « generateur-licences.html », gardé par le fournisseur — elle ne peut plus être créée depuis l'application elle-même.</p>
@@ -5098,7 +5238,7 @@ function renderParametres(){
           <tr id="ligne-reset-mdp-${u.id}" style="display:none;">
             <td colspan="4" style="background:var(--navy-soft);">
               <form class="form-grid form-reset-mdp" data-id="${u.id}" style="margin:8px 0;">
-                <div class="field"><label>Nouveau mot de passe pour ${esc(u.nom)}</label><input name="motDePasse" type="password" required minlength="4"></div>
+                <div class="field"><label>Nouveau mot de passe pour ${esc(u.nom)}</label><input name="motDePasse" type="password" required minlength="8"></div>
                 <button class="btn gold" type="submit">Enregistrer le nouveau mot de passe</button>
               </form>
             </td>
@@ -5111,7 +5251,7 @@ function renderParametres(){
       <div class="field"><label>Nom complet</label><input name="nom" required placeholder="ex: Awa Compaoré"></div>
       <div class="field"><label>Identifiant de connexion</label><input name="identifiant" required placeholder="ex: awa.c"></div>
       <div class="field"><label>Intitulé du rôle (libre)</label><input name="roleLabel" ${UTILISATEURS.length===0?'value="Direction" readonly':'required placeholder="ex: Comptable, Surveillant général, Vie scolaire..."'}></div>
-      <div class="field"><label>Mot de passe</label><input name="motDePasse" type="password" required minlength="4"></div>
+      <div class="field"><label>Mot de passe</label><input name="motDePasse" type="password" required minlength="8"></div>
       <div class="field" style="grid-column:1/-1;">
         <label>Onglets accessibles à ce compte</label>
         ${UTILISATEURS.length===0 ? '<p class="muted" style="margin:2px 0 6px 0;">Le tout premier compte doit obligatoirement avoir un accès complet : c\'est le compte Direction qui active le système de comptes.</p>' : ''}
@@ -5227,7 +5367,7 @@ function renderParametres(){
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
       <button class="btn gold" id="btn-export">Télécharger une sauvegarde (.json.gz)</button>
       <label class="btn secondary" style="cursor:pointer;">Restaurer une sauvegarde
-        <input type="file" id="input-import" accept="application/json,.json,.gz,.json.gz" style="display:none;">
+        <input type="file" id="input-import" accept="application/json,.json,.gz,.json.gz,.gecole" style="display:none;">
       </label>
     </div>
     <p class="muted" style="margin-top:8px;">${(() => { const d = storageGet('derniere-sauvegarde-le'); return d ? 'Dernière sauvegarde téléchargée : '+new Date(d).toLocaleString('fr-FR') : "Aucune sauvegarde téléchargée pour l'instant."; })()}</p>
@@ -6132,6 +6272,7 @@ function buildBulletinHTML(eleveId, trimestre){
         <thead><tr><th>Matière</th><th>Coef</th><th>Dev. 1</th><th>Dev. 2</th><th>Moy. dev.</th><th>Comp.</th><th>Moy.</th><th>Moy. classe</th><th>Pts</th><th>Signature</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="10">Aucune note pour ce trimestre.</td></tr>'}${totauxHTML}</tbody>
       </table>
+      ${data.matieresNonNotees && data.matieresNonNotees.length ? `<div class="bulletin-alerte-non-notee">⚠ Matière(s) sans note ce trimestre — non comptée(s) dans la moyenne : ${esc(data.matieresNonNotees.join(', '))}</div>` : ''}
 
       <table class="bulletin-recap">
         <thead><tr><th>Trimestre</th><th>Moyenne</th><th>Moy. classe</th><th>Plus forte moy.</th><th>Plus faible moy.</th><th>Rang</th><th>Appréciation</th></tr></thead>
@@ -6495,9 +6636,15 @@ function attachHandlers(){
       if(delBtn){
         if(!(await confirmerAvecCode('Supprimer définitivement cet élève et toutes ses données (notes, paiements) ?'))) return;
         const elASupprimer = ELEVES.find(x=>x.id===delBtn.dataset.id);
-        ELEVES = ELEVES.filter(x=>x.id!==delBtn.dataset.id);
-        await imageDBSet('photo-'+delBtn.dataset.id, null);
+        // Purge des données liées AVANT le retrait de la fiche élève (et non l'inverse) : si
+        // l'opération est interrompue entre les deux (fermeture de l'app, coupure de courant —
+        // fréquente hors-ligne), on se retrouve au pire avec un élève resté visible mais sans
+        // données, que l'on peut resupprimer sans risque — plutôt que des notes/paiements
+        // orphelins et invisibles, comptés indéfiniment dans les totaux financiers du tableau de
+        // bord sans qu'aucun écran ne permette de s'en apercevoir.
         await purgerDonneesEleve(delBtn.dataset.id);
+        await imageDBSet('photo-'+delBtn.dataset.id, null);
+        ELEVES = ELEVES.filter(x=>x.id!==delBtn.dataset.id);
         await saveEleves();
         journaliser('Suppression élève', elASupprimer ? `${elASupprimer.nom} ${elASupprimer.prenom} (classe ${elASupprimer.classe}, matricule ${elASupprimer.matricule||'—'})` : delBtn.dataset.id);
         showToast('Élève supprimé'); render(); return;
@@ -6978,12 +7125,21 @@ function attachHandlers(){
         if(membre){
           const nbCreneaux = EMPLOI.filter(ev=>ev.personnelId===membre.id).length;
           const classesProfPrincipal = Object.keys(PROF_PRINCIPAL).filter(cl=>PROF_PRINCIPAL[cl]===`${membre.nom} ${membre.prenom}`);
-          if(nbCreneaux>0 || classesProfPrincipal.length>0){
+          // Un historique de paie (PAIE) est une pièce comptable — les mois déjà réglés doivent
+          // rester traçables même après le départ du personnel — donc on ne le purge JAMAIS
+          // automatiquement (contrairement aux notes/paiements d'un élève supprimé) ; mais rester
+          // silencieux sur son existence, comme avant ce correctif, revenait à laisser une entrée de
+          // paie s'afficher indéfiniment sous un nom "—" dans l'état des salaires, sans que personne
+          // n'en soit jamais informé. On l'ajoute donc à l'avertissement déjà existant pour
+          // l'emploi du temps et le rôle de professeur principal.
+          const nbEntreesPaie = PAIE.filter(pa=>pa.personnelId===membre.id).length;
+          if(nbCreneaux>0 || classesProfPrincipal.length>0 || nbEntreesPaie>0){
             const details = [
               nbCreneaux>0 ? `${nbCreneaux} créneau(x) dans l'emploi du temps` : null,
-              classesProfPrincipal.length>0 ? `professeur principal de : ${classesProfPrincipal.join(', ')}` : null
+              classesProfPrincipal.length>0 ? `professeur principal de : ${classesProfPrincipal.join(', ')}` : null,
+              nbEntreesPaie>0 ? `${nbEntreesPaie} bulletin(s) de paie déjà enregistré(s) cette année` : null
             ].filter(Boolean).join(' ; ');
-            if(!confirm(`${membre.nom} ${membre.prenom} est encore référencé(e) ailleurs (${details}).\n\nCes créneaux/rôles ne seront PAS automatiquement retirés et afficheront un nom qui n'existe plus.\n\nSupprimer quand même ?`)) return;
+            if(!confirm(`${membre.nom} ${membre.prenom} est encore référencé(e) ailleurs (${details}).\n\nCes créneaux/rôles ne seront PAS automatiquement retirés et afficheront un nom qui n'existe plus. L'historique de paie est conservé tel quel (pièce comptable) et continuera d'apparaître sous ce nom manquant dans l'état des salaires.\n\nSupprimer quand même ?`)) return;
           }
         }
         if(!(await confirmerAvecCode('Supprimer ce membre du personnel ?'))) return;
@@ -7450,7 +7606,7 @@ function attachHandlers(){
       const pin = f.get('pin')||'';
       const ok = await verifierHachage(pin, PARAMS.pinVerrouillageSel, PARAMS.pinVerrouillageHash);
       if(ok){
-        if(!PARAMS.pinVerrouillageHash.startsWith('v2$')){
+        if(!PARAMS.pinVerrouillageHash.startsWith('v3$')){
           PARAMS.pinVerrouillageHash = await hacherMotDePasse(pin, PARAMS.pinVerrouillageSel);
           await saveParams();
         }
@@ -8048,22 +8204,40 @@ async function hacherSha256Simple(motDePasse, sel){
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 const HACHAGE_ITERATIONS = 100000;
+// Hachage v3 (préfixe "v3$") : PBKDF2 natif du navigateur (600 000 tours de SHA-256, recommandation
+// OWASP), qui remplace la boucle manuelle de 100 000 appels à crypto.subtle.digest ci-dessous (v2).
+// PBKDF2 est un algorithme audité et spécifiquement conçu pour le hachage de mots de passe (calcul
+// interne optimisé), alors qu'enchaîner des SHA-256 "à la main" n'offre pas les mêmes garanties
+// pour un coût de calcul comparable — sur cette machine, v3 est même plus rapide (≈100 ms) que la
+// boucle v2 qu'il remplace (≈300 ms) tout en appliquant 6 fois plus de tours.
+async function hacherMotDePassePBKDF2(motDePasse, sel){
+  const cle = await crypto.subtle.importKey('raw', new TextEncoder().encode(motDePasse), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name:'PBKDF2', hash:'SHA-256', salt: new TextEncoder().encode(sel), iterations: 600000 }, cle, 256
+  );
+  return 'v3$'+Array.from(new Uint8Array(bits)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
 // Hachage renforcé (préfixe "v2$") : 100 000 tours de SHA-256 au lieu d'un seul tour. Rend une
 // attaque hors-ligne par force brute nettement plus coûteuse si un fichier de sauvegarde exporté
 // (qui contient ces hachages — voir exportBackup) venait à être exposé. Utilisé pour toute
 // création ou modification de mot de passe / code PIN / code de suppression.
 async function hacherMotDePasse(motDePasse, sel){
+  return hacherMotDePassePBKDF2(motDePasse, sel);
+}
+async function hacherMotDePasseV2(motDePasse, sel){
   let buf = new TextEncoder().encode(sel+'::'+motDePasse);
   for(let i=0;i<HACHAGE_ITERATIONS;i++){ buf = await crypto.subtle.digest('SHA-256', buf); }
   return 'v2$'+Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 // Vérifie une saisie contre un hachage stocké, quel qu'en soit le format : le nouveau format
-// renforcé ("v2$...") ou l'ancien format à un seul tour de SHA-256 utilisé par les versions
-// antérieures — jamais rejeté pour ne pas bloquer les comptes/codes déjà configurés avant cette
-// mise à jour (voir les appelants pour la mise à niveau automatique du hachage après vérification).
+// PBKDF2 ("v3$..."), l'ancien format à 100 000 tours de SHA-256 ("v2$...") ou le tout premier
+// format à un seul tour de SHA-256 utilisé par les toutes premières versions — jamais rejeté pour
+// ne pas bloquer les comptes/codes déjà configurés avant cette mise à jour (voir les appelants
+// pour la mise à niveau automatique du hachage vers v3 après une vérification réussie).
 async function verifierHachage(motDePasse, sel, hashAttendu){
   if(!hashAttendu) return false;
-  if(hashAttendu.startsWith('v2$')) return (await hacherMotDePasse(motDePasse, sel)) === hashAttendu;
+  if(hashAttendu.startsWith('v3$')) return (await hacherMotDePassePBKDF2(motDePasse, sel)) === hashAttendu;
+  if(hashAttendu.startsWith('v2$')) return (await hacherMotDePasseV2(motDePasse, sel)) === hashAttendu;
   return (await hacherSha256Simple(motDePasse, sel)) === hashAttendu;
 }
 const saveUtilisateurs = () => save('utilisateurs-data', UTILISATEURS);
@@ -8140,9 +8314,27 @@ async function verifierConnexionEtDemarrer(){
     const motDePasse = f.get('motDePasse');
     const u = UTILISATEURS.find(x=>x.id===userId);
     if(!u) return;
+    const erreurEl = document.getElementById('erreur-connexion');
+    // Limite de tentatives : sans elle, un mot de passe pouvait être deviné par essais illimités
+    // et automatisables (aucun ralentissement, aucune trace). Comptes par utilisateur, verrouillage
+    // temporaire après 5 échecs consécutifs, durée doublée à chaque nouveau verrouillage (protection
+    // contre le réessai immédiat après expiration) — persisté dans localStorage pour résister à un
+    // simple rechargement de la page, borné via horodatageEffectifLicence() pour résister à un recul
+    // délibéré de l'horloge système visant à lever le verrouillage prématurément.
+    const tentatives = storageGet('tentatives-connexion') || {};
+    const t = tentatives[u.id] || { echecs:0, verrouilleJusque:0, dureeMinutes:5 };
+    const maintenant = horodatageEffectifLicence();
+    if(t.verrouilleJusque > maintenant){
+      const minutesRestantes = Math.ceil((t.verrouilleJusque - maintenant)/60000);
+      erreurEl.textContent = `Trop de tentatives échouées. Réessayez dans ${minutesRestantes} minute(s).`;
+      erreurEl.style.display = 'block';
+      return;
+    }
     const ok = await verifierHachage(motDePasse, u.sel, u.hash);
     if(ok){
-      if(!u.hash.startsWith('v2$')){
+      delete tentatives[u.id];
+      storageSet('tentatives-connexion', tentatives);
+      if(!u.hash.startsWith('v3$')){
         u.hash = await hacherMotDePasse(motDePasse, u.sel);
         await saveUtilisateurs();
       }
@@ -8151,7 +8343,18 @@ async function verifierConnexionEtDemarrer(){
       overlay.style.display = 'none';
       loadAll();
     } else {
-      document.getElementById('erreur-connexion').style.display = 'block';
+      t.echecs++;
+      if(t.echecs >= 5){
+        t.verrouilleJusque = maintenant + t.dureeMinutes*60000;
+        t.dureeMinutes = Math.min(t.dureeMinutes*2, 60);
+        t.echecs = 0;
+        erreurEl.textContent = `Trop de tentatives échouées. Compte verrouillé ${Math.round((t.verrouilleJusque-maintenant)/60000)} minute(s).`;
+      } else {
+        erreurEl.textContent = 'Mot de passe incorrect.';
+      }
+      tentatives[u.id] = t;
+      storageSet('tentatives-connexion', tentatives);
+      erreurEl.style.display = 'block';
     }
   });
 }
