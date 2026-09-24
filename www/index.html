@@ -5198,8 +5198,8 @@ function renderParametres(){
   </div>
 
   <div class="panel">
-    <div class="panel-head"><h3>Licence du logiciel</h3><p class="desc" style="width:100%;">Établissement activé : <strong>${esc(activation?.clientName || '—')}</strong>${activation?.activeLe ? ' — depuis le '+new Date(activation.activeLe).toLocaleDateString('fr-FR') : ''}${activation?.exp ? ' — valable jusqu\'au '+new Date(activation.exp).toLocaleDateString('fr-FR') : ''}.</p></div>
-    <p class="muted" style="margin-top:8px;">Pour vendre ce logiciel à un autre établissement, transmettez-lui une copie de ce fichier. La clé de licence se génère uniquement depuis l'outil « generateur-licences.html », gardé par le fournisseur — elle ne peut plus être créée depuis l'application elle-même.</p>
+    <div class="panel-head"><h3>Licence du logiciel</h3><p class="desc" style="width:100%;">Établissement activé : <strong>${esc(activation?.clientName || '—')}</strong>${activation?.activeLe ? ' — depuis le '+new Date(activation.activeLe).toLocaleDateString('fr-FR') : ''}.</p></div>
+    <p class="muted" style="margin-top:6px;">${activation?.exp ? 'Date d\'expiration : <strong>'+new Date(activation.exp).toLocaleDateString('fr-FR')+'</strong>' : 'Licence sans date d\'expiration (activation permanente).'}</p>
   </div>
 
   <div class="panel">
