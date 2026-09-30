@@ -771,7 +771,9 @@ const DEFAULT_PARAMS = {
   sauvegardeAutoFrequenceJours: 7,
   fonctionsPersonnel: ['Enseignant','Surveillant général','Comptable','Secrétaire',"Personnel d'appui",'Autre'],
   paie: {
-    prixHeureVacation: 2000,
+    prixHeureVacation: 2000, // ancien tarif unique (conservé pour les anciennes fiches de paie)
+    prixHeureVacationLycee: 2000,
+    prixHeureVacationCollege: 2000,
     permanenceLyceeHeures: 18,
     permanenceLyceeMontant: 100000,
     permanenceCollegeHeures: 22,
@@ -919,7 +921,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7
 // Numéro de version du logiciel, affiché dans Paramètres pour faciliter le support (savoir
 // quelle version un établissement utilise). À incrémenter à chaque nouvelle build envoyée à un
 // client — garder aligné avec la "version" du package.json (Electron/Capacitor) par cohérence.
-const VERSION_LOGICIEL = '1.2.0';
+const VERSION_LOGICIEL = '1.2.1';
 
 const esc = s => (s===undefined||s===null) ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -1234,6 +1236,12 @@ async function loadAll(){
   const savedParams = storageGet('parametres-data') || {};
   PARAMS = Object.assign({}, DEFAULT_PARAMS, savedParams);
   PARAMS.paie = Object.assign({}, DEFAULT_PARAMS.paie, savedParams.paie || {});
+  // Migration : avant, un seul prix/heure de vacation existait ; il devient le point de départ des
+  // deux tarifs (Lycée / Collège), à ajuster ensuite dans Paramètres.
+  if(savedParams.paie && savedParams.paie.prixHeureVacation!==undefined){
+    if(savedParams.paie.prixHeureVacationLycee===undefined) PARAMS.paie.prixHeureVacationLycee = savedParams.paie.prixHeureVacation;
+    if(savedParams.paie.prixHeureVacationCollege===undefined) PARAMS.paie.prixHeureVacationCollege = savedParams.paie.prixHeureVacation;
+  }
   const savedName = storageGet('school-name');
   if(savedName) document.getElementById('school-name').value = savedName;
   LOGO_DATA_URL = PHOTOS_CACHE['logo'] || storageGet('logo-data') || '';
@@ -1514,9 +1522,13 @@ function updateCrestDisplay(){
 // non supporté par Electron : les appels à prompt() y échouent silencieusement, ce qui bloquait
 // TOUTES les suppressions/réinitialisations sans aucun message d'erreur).
 // Retourne une Promise résolue avec la saisie (string), ou null si annulé.
+let _modaleSaisieAnnuler = null;
 function demanderSaisie(message, {password=false, placeholder=''} = {}){
   return new Promise(resolve=>{
     const root = document.getElementById('code-modal-root');
+    // Une seule modale à la fois : si une précédente est encore ouverte (double clic...), elle est
+    // annulée proprement (résolue à null) au lieu de rester en suspens indéfiniment.
+    if(_modaleSaisieAnnuler){ const a=_modaleSaisieAnnuler; _modaleSaisieAnnuler=null; a(); }
     root.innerHTML = `
       <div class="code-modal-backdrop">
         <div class="code-modal">
@@ -1530,7 +1542,10 @@ function demanderSaisie(message, {password=false, placeholder=''} = {}){
         </div>
       </div>`;
     const input = document.getElementById('code-modal-input');
-    const cleanup = (val)=>{ root.innerHTML=''; resolve(val); };
+    let termine = false;
+    const cleanup = (val)=>{ if(termine) return; termine = true; if(_modaleSaisieAnnuler===annuler) _modaleSaisieAnnuler=null; root.innerHTML=''; resolve(val); };
+    const annuler = ()=>{ if(termine) return; termine = true; resolve(null); };
+    _modaleSaisieAnnuler = annuler;
     document.getElementById('code-modal-cancel').addEventListener('click', ()=>cleanup(null));
     document.getElementById('code-modal-ok').addEventListener('click', ()=>cleanup(input.value));
     input.addEventListener('keydown', e=>{
@@ -1653,7 +1668,16 @@ function demanderChoix(message, options){
 // Demande le code de suppression avant toute suppression ou réinitialisation.
 // Retourne (async) true si le code saisi est correct, false sinon (annulé ou incorrect).
 // Le code est vérifié par hachage (voir hacherMotDePasse) et n'est jamais comparé en clair.
+let _confirmationEnCours = false;
 async function confirmerAvecCode(message){
+  // Anti-rafale : tant qu'une confirmation (saisie + vérification PBKDF2) est en cours, un clic
+  // répété ne relance pas une seconde demande.
+  if(_confirmationEnCours) return false;
+  _confirmationEnCours = true;
+  try{ return await _confirmerAvecCodeInterne(message); }
+  finally{ _confirmationEnCours = false; }
+}
+async function _confirmerAvecCodeInterne(message){
   if(!PARAMS.codeSuppressionHash){
     alert("Aucun code de suppression n'est configuré.\n\nAllez dans Paramètres → Sécurité des suppressions pour en définir un avant de pouvoir supprimer ou réinitialiser quoi que ce soit.");
     return false;
@@ -2159,7 +2183,7 @@ function computeTrimestre(eleveId, trimestre){
   const lignes = notes.map(n=>{
     const info = getMatiereInfo(n, classe);
     const calc = moyenneMatiere(n);
-    return { matiere: info.nom, matiereId: n.matiereId, coefficient: info.coefficient, categorie: info.categorie, enseignant: info.enseignant, ...calc };
+    return { matiere: info.nom, matiereId: n.matiereId, coefficient: info.coefficient, categorie: info.categorie, enseignant: info.enseignant, justif: (n.justif||'').trim(), ...calc };
   }).filter(l => l.moyenne!==null && !(dispenseSport && l.categorie==='Sport'));
 
   let totalPoints=0, totalCoeff=0;
@@ -2193,10 +2217,23 @@ function computeTrimestre(eleveId, trimestre){
   // définitive alors qu'elle ne portait en réalité que sur les matières déjà saisies.
   const matieresAttendues = classe ? matieresPourClasse(classe).filter(m=>!(dispenseSport && m.categorie==='Sport')) : [];
   const idsNotes = new Set(lignes.map(l=>l.matiereId));
-  const matieresNonNotees = matieresAttendues.filter(m=>!idsNotes.has(m.id)).map(m=>m.nom);
+  // Absence JUSTIFIÉE le jour de l'évaluation (et pas de rattrapage organisé) : la matière n'est
+  // pas comptée dans la moyenne (comme une matière non notée) mais n'est plus signalée comme
+  // « sans note » — le bulletin affiche à la place « Absence justifiée » avec le motif saisi.
+  const matieresJustifiees = [];
+  const idsJustifiees = new Set();
+  notes.forEach(n=>{
+    const motif = (n.justif||'').trim();
+    if(!motif || idsNotes.has(n.matiereId) || moyenneMatiere(n).moyenne!==null) return;
+    const m = matieresAttendues.find(x=>x.id===n.matiereId);
+    if(!m) return; // matière supprimée ou sport dispensé : rien à afficher
+    idsJustifiees.add(m.id);
+    matieresJustifiees.push({ nom: m.nom, motif });
+  });
+  const matieresNonNotees = matieresAttendues.filter(m=>!idsNotes.has(m.id) && !idsJustifiees.has(m.id)).map(m=>m.nom);
 
   const moyenneGenerale = totalCoeff>0 ? totalPointsAjuste/totalCoeff : null;
-  return { lignes, sousMoyennes, moyenneGenerale, totalCoeff, totalPoints, reductionConduite, reductionAbsence, totalPointsAjuste, dispenseSport, motifSportDispense: reduc.motifSportDispense||'', matieresNonNotees };
+  return { lignes, sousMoyennes, moyenneGenerale, totalCoeff, totalPoints, reductionConduite, reductionAbsence, totalPointsAjuste, dispenseSport, motifSportDispense: reduc.motifSportDispense||'', matieresNonNotees, matieresJustifiees };
 }
 
 // Moyenne de la classe pour chaque matière, à un trimestre donné : moyenne (sur les élèves
@@ -2428,12 +2465,33 @@ function decisionSuggeree(moyAnnuelle, estClasseExamen, eleve){
   return lExclu;
 }
 
+// Libellé du détail d'une ligne de paie (Vacation : heures par niveau si renseignées).
+function detailLignePaie(p){
+  if(p.type==='Vacation'){
+    if(p.heuresLycee!==undefined || p.heuresCollege!==undefined){
+      const parts = [];
+      if(Number(p.heuresLycee)>0) parts.push('Lycée '+p.heuresLycee+' h');
+      if(Number(p.heuresCollege)>0) parts.push('Collège '+p.heuresCollege+' h');
+      return parts.length ? parts.join(' + ') : '0 h';
+    }
+    return p.heures+' h';
+  }
+  return p.type==='Permanence' ? p.niveau+' — '+p.heures+' h/sem.' : 'Fixe';
+}
+
 // Calcule le brut / taxe / net d'une ligne de paie
 function calculSalaire(entry){
   const paie = PARAMS.paie;
   let brut = 0;
   if(entry.type==='Vacation'){
-    brut = Number(entry.heures||0) * Number(paie.prixHeureVacation||0);
+    if(entry.heuresLycee!==undefined || entry.heuresCollege!==undefined){
+      // Deux tarifs horaires distincts selon le niveau (Lycée / Collège), comme pour la permanence.
+      brut = Number(entry.heuresLycee||0) * Number(paie.prixHeureVacationLycee ?? paie.prixHeureVacation ?? 0)
+           + Number(entry.heuresCollege||0) * Number(paie.prixHeureVacationCollege ?? paie.prixHeureVacation ?? 0);
+    } else {
+      // Anciennes fiches (avant la séparation Lycée/Collège) : tarif unique d'origine.
+      brut = Number(entry.heures||0) * Number(paie.prixHeureVacation||0);
+    }
   } else if(entry.type==='Permanence'){
     if(entry.niveau==='Lycée'){
       brut = Number(entry.heures||0) * (Number(paie.permanenceLyceeMontant||0) / Number(paie.permanenceLyceeHeures||1));
@@ -3328,6 +3386,7 @@ function renderGrilleSaisie(trimestre, classe, matiereId){
       <td class="grille-moy" data-moydev>${c.moyDevoirs!==null?c.moyDevoirs.toFixed(2):'—'}</td>
       <td><input type="number" min="0" max="20" step="0.25" class="inline-num" data-field="composition" value="${c.comp!==null?c.comp:''}"></td>
       <td class="grille-moy avg-pill" data-moyfinale>${c.moyenne!==null?c.moyenne.toFixed(2):'—'}</td>
+      <td><input type="text" maxlength="80" class="inline-txt" data-field="justif" placeholder="Motif si absence justifiée" value="${esc(n && n.justif ? n.justif : '')}" style="width:100%;min-width:150px;"></td>
     </tr>`;
   }).join('');
 
@@ -3340,10 +3399,11 @@ function renderGrilleSaisie(trimestre, classe, matiereId){
     <p class="desc" style="margin:-6px 0 12px 0;">Pondération : ${PARAMS.ponderationDevoirs}% moyenne des devoirs + ${PARAMS.ponderationComposition}% composition. Les moyennes se recalculent automatiquement pendant la saisie.</p>
     <div class="table-wrap">
       <table id="grille-notes-table">
-        <thead><tr><th>Élève</th><th>Devoir 1</th><th>Devoir 2</th><th>Moy. devoirs</th><th>Composition</th><th>Moyenne</th></tr></thead>
-        <tbody>${rows || '<tr class="empty-row"><td colspan="6">Aucun élève dans cette classe.</td></tr>'}</tbody>
+        <thead><tr><th>Élève</th><th>Devoir 1</th><th>Devoir 2</th><th>Moy. devoirs</th><th>Composition</th><th>Moyenne</th><th>Absence justifiée (motif)</th></tr></thead>
+        <tbody>${rows || '<tr class="empty-row"><td colspan="7">Aucun élève dans cette classe.</td></tr>'}</tbody>
       </table>
     </div>
+    <p class="desc" style="margin:10px 0 0 0;">Absence justifiée : si l'élève n'a pas composé un devoir parce que son absence est justifiée et qu'aucun rattrapage n'a pu être organisé, indiquez le motif (ex. maladie). Le bulletin affichera « Abs. j. » au lieu d'un simple tiret, et la matière ne sera pas signalée comme « sans note ». Sans note du tout, la matière n'est pas comptée dans la moyenne.</p>
     ${eleves.length>0 ? '<button class="btn gold" id="btn-save-grille" style="margin-top:14px;" data-classe="'+esc(classe)+'" data-matiere="'+matiereId+'" data-trimestre="'+esc(trimestre)+'">Enregistrer toutes les notes</button>' : ''}
   </div>
   `;
@@ -3670,7 +3730,8 @@ function renderSalaires(){
     ${vacatairesNonPayes.length>0 ? `
     <form id="form-paie-vacataire" class="form-grid">
       <div class="field"><label>Enseignant</label><select name="personnelId" required>${vacatairesNonPayes.map(p=>`<option value="${p.id}">${esc(p.nom)} ${esc(p.prenom)}</option>`).join('')}</select></div>
-      <div class="field"><label>Heures assurées ce mois</label><input name="heures" type="number" min="0" step="0.5" required></div>
+      <div class="field"><label>Heures assurées au Lycée ce mois</label><input name="heuresLycee" type="number" min="0" step="0.5" value="0"></div>
+      <div class="field"><label>Heures assurées au Collège ce mois</label><input name="heuresCollege" type="number" min="0" step="0.5" value="0"></div>
       <button class="btn" type="submit">Enregistrer</button>
     </form>` : '<p class="muted">Tous les enseignants Vacataires ont déjà été payés ce mois.</p>'}`}
   </div>`;
@@ -3705,7 +3766,7 @@ function renderSalaires(){
         ${entriesMois.length===0 ? '<tr class="empty-row"><td colspan="7">Aucun salaire enregistré pour ce mois.</td></tr>' :
           entriesMois.map(p=>{
             const pers = PERSONNEL.find(x=>x.id===p.personnelId);
-            const detail = p.type==='Vacation' ? p.heures+' h' : p.type==='Permanence' ? p.niveau+' — '+p.heures+' h/sem.' : 'Fixe';
+            const detail = detailLignePaie(p);
             return `<tr><td>${pers?esc(pers.nom)+' '+esc(pers.prenom):'—'}</td><td>${esc(p.type)}</td><td>${esc(detail)}</td>
               <td>${fmt(p.brut)}</td><td>${fmt(p.taxe)}</td><td><strong>${fmt(p.net)}</strong></td>
               <td><button class="btn danger small" data-action="del-paie" data-id="${p.id}">Supprimer</button></td></tr>`;
@@ -5541,7 +5602,8 @@ function renderParametres(){
   <div class="panel">
     <div class="panel-head"><h3>Paie du personnel enseignant</h3><p class="desc" style="width:100%;">Paramètres utilisés pour calculer automatiquement les salaires en fin de mois (Vacation et Permanence).</p></div>
     <form id="form-paie" class="form-grid">
-      <div class="field"><label>Prix / heure — Vacation (FCFA)</label><input name="prixHeureVacation" type="number" min="0" value="${PARAMS.paie.prixHeureVacation}"></div>
+      <div class="field"><label>Vacation Lycée — prix / heure (FCFA)</label><input name="prixHeureVacationLycee" type="number" min="0" value="${PARAMS.paie.prixHeureVacationLycee}"></div>
+      <div class="field"><label>Vacation Collège — prix / heure (FCFA)</label><input name="prixHeureVacationCollege" type="number" min="0" value="${PARAMS.paie.prixHeureVacationCollege}"></div>
       <div class="field"><label>Permanence Lycée — heures de référence</label><input name="permanenceLyceeHeures" type="number" min="1" value="${PARAMS.paie.permanenceLyceeHeures}"></div>
       <div class="field"><label>Permanence Lycée — montant (FCFA)</label><input name="permanenceLyceeMontant" type="number" min="0" value="${PARAMS.paie.permanenceLyceeMontant}"></div>
       <div class="field"><label>Permanence Collège — heures de référence</label><input name="permanenceCollegeHeures" type="number" min="1" value="${PARAMS.paie.permanenceCollegeHeures}"></div>
@@ -5549,7 +5611,7 @@ function renderParametres(){
       <div class="field"><label>Taux de taxe sur salaire (%)</label><input name="tauxTaxe" type="number" min="0" max="100" step="0.1" value="${PARAMS.paie.tauxTaxe}"></div>
       <button class="btn gold" type="submit">Enregistrer</button>
     </form>
-    <p class="muted" style="margin-top:8px;">Vacation : salaire = heures assurées × prix/heure. Permanence : salaire = heures assurées × (montant de référence ÷ heures de référence) selon le niveau (Lycée ou Collège). Le personnel non-enseignant a un salaire fixé individuellement (onglet Personnel).</p>
+    <p class="muted" style="margin-top:8px;">Vacation : salaire = heures Lycée × prix/heure Lycée + heures Collège × prix/heure Collège. Permanence : salaire = heures assurées × (montant de référence ÷ heures de référence) selon le niveau (Lycée ou Collège). Le personnel non-enseignant a un salaire fixé individuellement (onglet Personnel).</p>
   </div>
 
   <div class="panel">
@@ -6057,7 +6119,7 @@ function buildPaieMoisListHTML(mois){
   const total = entries.reduce((s,p)=>s+p.net,0);
   const rows = entries.map((p,i)=>{
     const pers = PERSONNEL.find(x=>x.id===p.personnelId);
-    const detail = p.type==='Vacation' ? p.heures+' h' : p.type==='Permanence' ? p.niveau+' — '+p.heures+' h/sem.' : 'Fixe';
+    const detail = detailLignePaie(p);
     return `<tr><td>${i+1}</td><td>${pers?esc(pers.nom)+' '+esc(pers.prenom):'—'}</td><td>${esc(p.type)}</td><td>${esc(detail)}</td><td>${fmt(p.brut)}</td><td>${fmt(p.taxe)}</td><td><strong>${fmt(p.net)}</strong></td></tr>`;
   }).join('');
   return `
@@ -6214,9 +6276,9 @@ function buildBulletinHTML(eleveId, trimestre){
     const moyClasse = moyClasseParMatiere[l.matiereId];
     return `
     <tr><td>${esc(l.matiere)}</td><td>${l.coefficient}</td>
-    <td>${l.d1!==null?l.d1:'—'}</td><td>${l.d2!==null?l.d2:'—'}</td>
+    <td>${l.d1!==null?l.d1:(l.justif?'Abs. j.':'—')}</td><td>${l.d2!==null?l.d2:(l.justif?'Abs. j.':'—')}</td>
     <td>${l.moyDevoirs!==null?l.moyDevoirs.toFixed(2):'—'}</td>
-    <td>${l.comp!==null?l.comp.toFixed(2):'—'}</td>
+    <td>${l.comp!==null?l.comp.toFixed(2):(l.justif?'Abs. j.':'—')}</td>
     <td><strong>${l.moyenne.toFixed(2)}</strong></td>
     <td>${moyClasse!==undefined?moyClasse.toFixed(2):'—'}</td>
     <td>${(l.moyenne*l.coefficient).toFixed(2)}</td>
@@ -6305,6 +6367,13 @@ function buildBulletinHTML(eleveId, trimestre){
         <tbody>${rows || '<tr><td colspan="10">Aucune note pour ce trimestre.</td></tr>'}${totauxHTML}</tbody>
       </table>
       ${data.matieresNonNotees && data.matieresNonNotees.length ? `<div class="bulletin-alerte-non-notee">⚠ Matière(s) sans note ce trimestre — non comptée(s) dans la moyenne : ${esc(data.matieresNonNotees.join(', '))}</div>` : ''}
+      ${(()=>{
+        const justifs = [
+          ...(data.matieresJustifiees||[]).map(j=>`${j.nom} (${j.motif})`),
+          ...data.lignes.filter(l=>l.justif && (l.d1===null || l.d2===null || l.comp===null)).map(l=>`${l.matiere} (${l.justif}) — évaluation(s) manquante(s), moyenne calculée sur les notes obtenues`)
+        ];
+        return justifs.length ? `<div class="bulletin-info-ligne" style="margin-top:6px;">Absence justifiée le jour de l'évaluation (Abs. j.) : ${esc(justifs.join(' ; '))}${(data.matieresJustifiees||[]).length ? ' — matière non comptée dans la moyenne.' : '.'}</div>` : '';
+      })()}
 
       <table class="bulletin-recap">
         <thead><tr><th>Trimestre</th><th>Moyenne</th><th>Moy. classe</th><th>Plus forte moy.</th><th>Plus faible moy.</th><th>Rang</th><th>Appréciation</th></tr></thead>
@@ -6382,7 +6451,7 @@ function buildFicheRecapGeneraleClassePrintHTML(classe, trimestre){
       const n = NOTES.find(x=>x.eleveId===e.id && x.matiereId===m.id && x.trimestre===trimestre);
       const moyenne = n ? moyenneMatiere(n).moyenne : null;
       const rangEntry = classementsMatieres[i].classement.find(r=>r.eleveId===e.id);
-      if(moyenne===null) return '<td>—</td>';
+      if(moyenne===null) return `<td>${n && (n.justif||'').trim() ? 'Abs. j.' : '—'}</td>`;
       return `<td>${moyenne.toFixed(2)}${rangEntry?' <span style="color:var(--ink-soft);">('+rangEntry.rang+'e)</span>':''}</td>`;
     }).join('');
     const t = computeTrimestre(e.id, trimestre);
@@ -6523,6 +6592,17 @@ function buildDeliberationBlancHTML(classe, examenBlancId, decisionCle){
 }
 
 /* ---------- Handlers ---------- */
+// Les écouteurs délégués de #content sont REMPLACÉS à chaque rendu au lieu de s'empiler : avant ce
+// correctif, chaque render() ajoutait un écouteur de plus, si bien qu'après N actions un seul clic
+// (ex. « Supprimer ») déclenchait N+1 fois le même traitement (N demandes de code, N suppressions,
+// N hachages PBKDF2...) — cause des plantages lors d'enchaînements d'actions.
+const _ecouteursContent = {};
+function lierContent(type, fn){
+  const c = document.getElementById('content');
+  if(_ecouteursContent[type]) c.removeEventListener(type, _ecouteursContent[type]);
+  _ecouteursContent[type] = fn;
+  c.addEventListener(type, fn);
+}
 function attachHandlers(){
   // Handlers d'export CSV — communs à tous les onglets où un bouton "Exporter CSV" peut apparaître.
   document.querySelectorAll('[data-action="export-csv-classe-eleves"]').forEach(btn=>{
@@ -6634,7 +6714,7 @@ function attachHandlers(){
       }, 250);
     });
 
-    document.getElementById('content').addEventListener('click', async (e)=>{
+    lierContent('click', async (e)=>{
       const modifierBtn = e.target.closest('[data-action="modifier-eleve"]');
       if(modifierBtn){
         const ok = await ouvrirModaleEditionEleve(modifierBtn.dataset.id);
@@ -6690,7 +6770,7 @@ function attachHandlers(){
       const afficherPlus = e.target.closest('[data-action="afficher-plus-eleves"]');
       if(afficherPlus){ CLASSES_TABLEAU_ETENDU.add(afficherPlus.dataset.classe); render(); return; }
     });
-    document.getElementById('content').addEventListener('change', async (e)=>{
+    lierContent('change', async (e)=>{
       const input = e.target.closest('[data-action="edit-frais"]');
       if(input){
         const el = ELEVES.find(x=>x.id===input.dataset.id);
@@ -6925,9 +7005,13 @@ function attachHandlers(){
         const nComp = parseNoteBornee(row.querySelector('[data-field="composition"]').value);
         const d1 = nD1.valeur, d2 = nD2.valeur, comp = nComp.valeur;
         if(nD1.corrigee || nD2.corrigee || nComp.corrigee) nbCorrections++;
+        // Motif d'absence justifiée : sans objet (donc effacé) dès que les trois évaluations sont notées.
+        const champJustif = row.querySelector('[data-field="justif"]');
+        let justif = champJustif ? champJustif.value.trim().slice(0,80) : null;
+        if(justif!==null && d1!==null && d2!==null && comp!==null) justif = '';
         let existing = NOTES.find(n=>n.eleveId===eleveId && n.matiereId===matiereId && n.trimestre===trimestre);
-        if(existing){ existing.devoir1=d1; existing.devoir2=d2; existing.composition=comp; }
-        else if(d1!==null || d2!==null || comp!==null){ NOTES.push({id:uid(), eleveId, matiereId, trimestre, devoir1:d1, devoir2:d2, composition:comp}); }
+        if(existing){ existing.devoir1=d1; existing.devoir2=d2; existing.composition=comp; if(justif!==null) existing.justif = justif; }
+        else if(d1!==null || d2!==null || comp!==null || justif){ NOTES.push({id:uid(), eleveId, matiereId, trimestre, devoir1:d1, devoir2:d2, composition:comp, justif: justif||''}); }
       });
       await saveNotes();
       if(estCompteEnseignant()){
@@ -7100,7 +7184,10 @@ function attachHandlers(){
         render();
         return;
       }
-      const entry = { id: uid(), mois: paieMoisSelectionne, personnelId, type:'Vacation', heures: Number(f.get('heures'))||0 };
+      const heuresLycee = Math.max(0, Number(f.get('heuresLycee'))||0);
+      const heuresCollege = Math.max(0, Number(f.get('heuresCollege'))||0);
+      if(heuresLycee + heuresCollege <= 0){ alert('Saisissez au moins une heure (Lycée ou Collège).'); return; }
+      const entry = { id: uid(), mois: paieMoisSelectionne, personnelId, type:'Vacation', heuresLycee, heuresCollege, heures: heuresLycee + heuresCollege };
       const calc = calculSalaire(entry);
       PAIE.push({ ...entry, ...calc });
       await savePaie();
@@ -7731,9 +7818,13 @@ function attachHandlers(){
 
     document.getElementById('form-deverrouiller')?.addEventListener('submit', async (e)=>{
       e.preventDefault();
+      if(e.target.dataset.occupe) return; // anti double soumission (vérification PBKDF2 en cours)
+      e.target.dataset.occupe = '1';
       const f = new FormData(e.target);
       const pin = f.get('pin')||'';
-      const ok = await verifierHachage(pin, PARAMS.pinVerrouillageSel, PARAMS.pinVerrouillageHash);
+      let ok = false;
+      try{ ok = await verifierHachage(pin, PARAMS.pinVerrouillageSel, PARAMS.pinVerrouillageHash); }
+      finally{ delete e.target.dataset.occupe; }
       if(ok){
         if(!PARAMS.pinVerrouillageHash.startsWith('v3$')){
           PARAMS.pinVerrouillageHash = await hacherMotDePasse(pin, PARAMS.pinVerrouillageSel);
@@ -8111,7 +8202,8 @@ function attachHandlers(){
     document.getElementById('form-paie')?.addEventListener('submit', async (e)=>{
       e.preventDefault();
       const f = new FormData(e.target);
-      PARAMS.paie.prixHeureVacation = Number(f.get('prixHeureVacation'))||0;
+      PARAMS.paie.prixHeureVacationLycee = Number(f.get('prixHeureVacationLycee'))||0;
+      PARAMS.paie.prixHeureVacationCollege = Number(f.get('prixHeureVacationCollege'))||0;
       PARAMS.paie.permanenceLyceeHeures = Number(f.get('permanenceLyceeHeures'))||1;
       PARAMS.paie.permanenceLyceeMontant = Number(f.get('permanenceLyceeMontant'))||0;
       PARAMS.paie.permanenceCollegeHeures = Number(f.get('permanenceCollegeHeures'))||1;
@@ -8599,8 +8691,17 @@ async function verifierConnexionEtDemarrer(){
   select.innerHTML = UTILISATEURS.map(u=>`<option value="${u.id}">${esc(u.nom)} — ${esc(u.roleLabel||'')}</option>`).join('');
   overlay.style.display = 'flex';
   document.getElementById('erreur-connexion').style.display = 'none';
+  // Verrou anti double soumission : sans lui, plusieurs Entrée/clics rapprochés lançaient plusieurs
+  // vérifications PBKDF2 et plusieurs chargements complets (loadAll) en parallèle, et le compteur
+  // de tentatives échouées pouvait être contourné ou faussé par des lectures concurrentes.
+  let connexionEnCours = false;
   document.getElementById('form-connexion').addEventListener('submit', async (e)=>{
     e.preventDefault();
+    if(connexionEnCours) return;
+    connexionEnCours = true;
+    try{ await _traiterConnexion(e); } finally { connexionEnCours = false; }
+  });
+  async function _traiterConnexion(e){
     const f = new FormData(e.target);
     const userId = f.get('utilisateurId');
     const motDePasse = f.get('motDePasse');
@@ -8653,7 +8754,7 @@ async function verifierConnexionEtDemarrer(){
       storageSet('tentatives-connexion', tentatives);
       erreurEl.style.display = 'block';
     }
-  });
+  }
 }
 
 async function verifierActivationEtDemarrer(){
