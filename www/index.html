@@ -921,7 +921,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7
 // Numéro de version du logiciel, affiché dans Paramètres pour faciliter le support (savoir
 // quelle version un établissement utilise). À incrémenter à chaque nouvelle build envoyée à un
 // client — garder aligné avec la "version" du package.json (Electron/Capacitor) par cohérence.
-const VERSION_LOGICIEL = '1.2.1';
+const VERSION_LOGICIEL = '1.2.2';
 
 const esc = s => (s===undefined||s===null) ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -1434,7 +1434,7 @@ const saveEleves = async () => {
   const sansPhotos = ELEVES.map(({photo, ...reste}) => reste);
   return save('eleves-data', sansPhotos);
 };
-const saveNotes = () => donneeDBSet('notes-data', NOTES);
+const saveNotes = () => { _indexNotes = null; return donneeDBSet('notes-data', NOTES); };
 const saveExamensBlancs = () => save('examens-blancs-data', EXAMENS_BLANCS);
 const saveNotesBlanc = () => save('notes-blanc-data', NOTES_BLANC);
 const saveDecisionsBlanc = () => save('decisions-blanc-data', DECISIONS_BLANC);
@@ -1950,7 +1950,7 @@ function importBackup(file){
       FINANCES = data.finances || { paiements: [], depenses: [] };
       PERSONNEL = data.personnel || [];
       PERSONNEL_ABSENCES = data.personnelAbsences || [];
-      PARAMS = Object.assign({}, DEFAULT_PARAMS, data.parametres || {});
+      PARAMS = normaliserParams(data.parametres);
       DECISIONS = data.decisions || {};
       PROF_PRINCIPAL = data.profPrincipal || {};
       PAIE = data.paie || [];
@@ -2171,10 +2171,42 @@ function calculerReductionAbsence(eleveId, trimestre){
 }
 
 // Calcule le détail complet d'un trimestre pour un élève : matières, sous-moyennes par catégorie, moyenne générale
+// Index des notes par (élève, trimestre) : sans lui, chaque calcul de moyenne parcourait TOUTES les
+// notes de l'école (1 200 élèves x 12 matières = 14 400 notes -> le tableau de bord, les classements
+// et les statistiques devenaient lents). L'index est reconstruit si la liste NOTES change de taille
+// ou d'identité (ajout, suppression, filtre) ; les modifications de valeurs sur une note existante
+// sont visibles directement puisque l'index référence les mêmes objets. Conserve l'ordre d'origine.
+let _indexNotes = null, _indexNotesRef = null, _indexNotesLen = -1;
+// Normalise les paramètres lus (stockage local OU ancienne sauvegarde restaurée) : complète les
+// sous-réglages de paie manquants par les valeurs par défaut et migre l'ancien tarif unique de
+// vacation vers les deux tarifs Lycée / Collège. Sans cela, restaurer une sauvegarde faite avant
+// la version 1.2.1 laissait ces deux tarifs indéfinis (champs vides, salaires de vacation à 0).
+function normaliserParams(saved){
+  saved = saved || {};
+  const params = Object.assign({}, DEFAULT_PARAMS, saved);
+  params.paie = Object.assign({}, DEFAULT_PARAMS.paie, saved.paie || {});
+  if(saved.paie && saved.paie.prixHeureVacation!==undefined){
+    if(saved.paie.prixHeureVacationLycee===undefined) params.paie.prixHeureVacationLycee = saved.paie.prixHeureVacation;
+    if(saved.paie.prixHeureVacationCollege===undefined) params.paie.prixHeureVacationCollege = saved.paie.prixHeureVacation;
+  }
+  return params;
+}
+function notesDeEleveTrimestre(eleveId, trimestre){
+  if(!_indexNotes || _indexNotesRef!==NOTES || _indexNotesLen!==NOTES.length){
+    _indexNotes = new Map();
+    for(const n of NOTES){
+      const cle = n.eleveId+'\u0001'+n.trimestre;
+      const liste = _indexNotes.get(cle);
+      if(liste) liste.push(n); else _indexNotes.set(cle, [n]);
+    }
+    _indexNotesRef = NOTES; _indexNotesLen = NOTES.length;
+  }
+  return _indexNotes.get(eleveId+'\u0001'+trimestre) || [];
+}
 function computeTrimestre(eleveId, trimestre){
   const eleve = ELEVES.find(e=>e.id===eleveId);
   const classe = eleve ? eleve.classe : null;
-  const notes = NOTES.filter(n=>n.eleveId===eleveId && n.trimestre===trimestre);
+  const notes = notesDeEleveTrimestre(eleveId, trimestre);
   // Réductions de points (conduite / absence-retard) et dispense de sport : rattachées à CE
   // trimestre précis (comme la discipline), pas à un statut général sur la fiche élève — sinon
   // changer le statut sport en cours d'année modifierait rétroactivement des bulletins déjà émis.
@@ -3780,6 +3812,123 @@ function renderSalaires(){
 }
 
 
+/* ---------- Modification complète d'une fiche du personnel ---------- */
+// Évite de supprimer puis ressaisir une fiche en cas d'erreur : tous les champs sont modifiables.
+// L'identifiant interne (id) ne change jamais : emploi du temps, paie, congés et compte enseignant
+// lié restent rattachés. Seuls les textes qui recopient le NOM (professeur principal, enseignant
+// d'une matière, nom affiché du compte enseignant) sont mis à jour en même temps.
+function ouvrirModaleEditionPersonnel(personnelId){
+  return new Promise(resolve=>{
+    const m = PERSONNEL.find(x=>x.id===personnelId);
+    if(!m) return resolve(false);
+    const root = document.getElementById('code-modal-root');
+    const fonctions = PARAMS.fonctionsPersonnel.includes(m.fonction) ? PARAMS.fonctionsPersonnel : [m.fonction, ...PARAMS.fonctionsPersonnel].filter(Boolean);
+    const sel = (v, cur) => v===cur ? 'selected' : '';
+    root.innerHTML = `
+      <div class="code-modal-backdrop">
+        <div class="code-modal code-modal-large">
+          <h3>Modifier la fiche de ${esc(m.nom)} ${esc(m.prenom)}</h3>
+          <form id="form-edit-personnel" class="form-grid">
+            <div class="field"><label>Nom</label><input name="nom" required value="${esc(m.nom)||''}"></div>
+            <div class="field"><label>Prénom</label><input name="prenom" required value="${esc(m.prenom)||''}"></div>
+            <div class="field"><label>Matricule</label><input name="matricule" value="${esc(m.matricule)||''}"></div>
+            <div class="field"><label>Fonction</label><select name="fonction" id="ep-fonction">${fonctions.map(f=>`<option ${sel(f,m.fonction)}>${esc(f)}</option>`).join('')}</select></div>
+            <div class="field" id="ep-matiere-field"><label>Matière (si enseignant)</label><input name="matiere" value="${esc(m.matiere)||''}"></div>
+            <div class="field" id="ep-type-field"><label>Type</label><select name="typePersonnel" id="ep-type"><option value="Permanent" ${sel('Permanent',m.typePersonnel)}>Permanent</option><option value="Vacataire" ${sel('Vacataire',m.typePersonnel)}>Vacataire</option></select></div>
+            <div class="field" id="ep-niveau-field"><label>Niveau</label><select name="niveauEnseignement"><option ${sel('Lycée',m.niveauEnseignement)}>Lycée</option><option ${sel('Collège',m.niveauEnseignement)}>Collège</option></select></div>
+            <div class="field" id="ep-heures-field"><label>Heures assurées / semaine</label><input name="heuresSemaine" type="number" min="0" step="0.5" value="${Number(m.heuresSemaine||0)}"></div>
+            <div class="field"><label>Contact</label><input name="contact" value="${esc(m.contact)||''}"></div>
+            <div class="field" id="ep-salaire-field"><label>Salaire fixe mensuel (FCFA)</label><input name="salaireFixe" type="number" min="0" value="${Number(m.salaireFixe||0)}"></div>
+            <div class="field"><label>Statut</label><select name="statut">${['Actif','Congé','Parti'].map(v=>`<option ${sel(v,m.statut)}>${v}</option>`).join('')}</select></div>
+            <div class="field"><label>Nombre de mois de paie (année)</label><input name="nbMoisPaie" type="number" min="0" max="12" value="${Number(m.nbMoisPaie||0)}"></div>
+            <div class="field"><label>Mois de départ de la paie</label><input name="moisDebutPaie" type="month" value="${esc(m.moisDebutPaie)||''}"></div>
+          </form>
+          <p class="code-modal-err" id="ep-err"></p>
+          <div class="code-modal-actions">
+            <button class="btn secondary small" id="ep-cancel" type="button">Annuler</button>
+            <button class="btn small" id="ep-ok" type="button">Enregistrer</button>
+          </div>
+        </div>
+      </div>`;
+    const form = document.getElementById('form-edit-personnel');
+    const errEl = document.getElementById('ep-err');
+    const cleanup = (val)=>{ root.innerHTML=''; resolve(val); };
+    const majChamps = ()=>{
+      const estEns = form.fonction.value==='Enseignant', estPerm = form.typePersonnel.value==='Permanent';
+      const show = (id, c)=>{ document.getElementById(id).style.display = c ? '' : 'none'; };
+      show('ep-matiere-field', estEns); show('ep-type-field', estEns);
+      show('ep-niveau-field', estEns && estPerm); show('ep-heures-field', estEns && estPerm);
+      show('ep-salaire-field', !estEns);
+    };
+    form.fonction.addEventListener('change', majChamps);
+    form.typePersonnel.addEventListener('change', majChamps);
+    majChamps();
+    document.getElementById('ep-cancel').addEventListener('click', ()=>cleanup(false));
+    let enCours = false;
+    document.getElementById('ep-ok').addEventListener('click', async ()=>{
+      if(enCours) return; enCours = true;
+      try{
+        const v = n => form[n].value;
+        const nom = v('nom').trim(), prenom = v('prenom').trim(), matricule = v('matricule').trim();
+        const erreur = msg => { errEl.textContent = msg; errEl.style.display = 'block'; };
+        if(!nom || !prenom) return erreur('Le nom et le prénom sont obligatoires.');
+        if(matricule){
+          const doublon = PERSONNEL.find(x=>x.id!==m.id && x.matricule && x.matricule.trim().toLowerCase()===matricule.toLowerCase());
+          if(doublon) return erreur(`Le matricule « ${matricule} » est déjà attribué à ${doublon.nom} ${doublon.prenom}.`);
+        }
+        const fonction = v('fonction');
+        const estEns = fonction==='Enseignant', estPerm = estEns && v('typePersonnel')==='Permanent';
+        // Passage Enseignant -> autre fonction : prévenir des liens qui n'auront plus de sens.
+        if(m.fonction==='Enseignant' && !estEns){
+          const nbCreneaux = EMPLOI.filter(ev=>ev.personnelId===m.id).length;
+          const compte = UTILISATEURS.find(u=>u.typeCompte==='enseignant' && u.personnelId===m.id);
+          if(nbCreneaux>0 || compte){
+            const d = [nbCreneaux>0 ? `${nbCreneaux} créneau(x) d'emploi du temps` : null, compte ? 'un compte enseignant lié' : null].filter(Boolean).join(' et ');
+            if(!confirm(`${m.nom} ${m.prenom} n'est plus enseignant(e) après cette modification, mais a encore ${d}.\n\nCes éléments sont conservés tels quels. Continuer ?`)) return;
+          }
+        }
+        const ancienComplet = `${m.nom} ${m.prenom}`, ancienInverse = `${m.prenom} ${m.nom}`;
+        const nouveauComplet = `${nom} ${prenom}`, nouveauInverse = `${prenom} ${nom}`;
+        const nomChange = nom!==m.nom || prenom!==m.prenom;
+        Object.assign(m, {
+          nom, prenom, matricule, fonction,
+          matiere: estEns ? v('matiere').trim() : '',
+          typePersonnel: estEns ? v('typePersonnel') : '',
+          niveauEnseignement: estPerm ? v('niveauEnseignement') : '',
+          heuresSemaine: estPerm ? (Number(v('heuresSemaine'))||0) : 0,
+          contact: v('contact').trim(),
+          salaireFixe: !estEns ? (Number(v('salaireFixe'))||0) : 0,
+          statut: v('statut'),
+          nbMoisPaie: Number(v('nbMoisPaie'))||0,
+          moisDebutPaie: v('moisDebutPaie')||''
+        });
+        if(nomChange){
+          const norm = t => (t||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+          const cibles = [norm(ancienComplet), norm(ancienInverse)];
+          let majParams = false;
+          Object.keys(PROF_PRINCIPAL).forEach(cl=>{
+            const i = cibles.indexOf(norm(PROF_PRINCIPAL[cl]));
+            if(i>=0){ PROF_PRINCIPAL[cl] = i===0 ? nouveauComplet : nouveauInverse; }
+          });
+          Object.values(PARAMS.matieresParClasse||{}).forEach(liste=>(liste||[]).forEach(mat=>{
+            const i = cibles.indexOf(norm(mat.enseignant));
+            if(i>=0){ mat.enseignant = i===0 ? nouveauComplet : nouveauInverse; majParams = true; }
+          }));
+          UTILISATEURS.forEach(u=>{ if(u.typeCompte==='enseignant' && u.personnelId===m.id && cibles.includes(norm(u.nom))) u.nom = nouveauComplet; });
+          await savePersonnel();
+          await saveProfPrincipal();
+          if(majParams) await saveParams();
+          await saveUtilisateurs();
+        } else {
+          await savePersonnel();
+        }
+        journaliser('Modification personnel', `${nouveauComplet} (${fonction})`);
+        cleanup(true);
+      } finally { enCours = false; }
+    });
+  });
+}
+
 function renderPersonnel(){
   const fonctionOptions = PARAMS.fonctionsPersonnel.map(f=>`<option>${esc(f)}</option>`).join('');
   const parFonction = {};
@@ -4765,7 +4914,7 @@ function renderPersonnelCategoriePanel(fonction, liste){
               <td><span class="badge ${cls}">${esc(p.statut)}</span>${estEnCongeAujourdhui(p.id) && p.statut!=='Congé' ? ' <span class="badge conge">En congé</span>' : ''}</td>
               <td><input type="number" min="0" max="12" class="inline-num" style="width:60px;" data-action="edit-nb-mois-paie" data-id="${p.id}" value="${Number(p.nbMoisPaie||0)}"></td>
               <td><input type="month" class="inline-num" style="width:130px;" data-action="edit-mois-debut-paie" data-id="${p.id}" value="${esc(p.moisDebutPaie)||''}"></td>
-              <td><button class="btn danger small" data-action="del-personnel" data-id="${p.id}">Supprimer</button></td></tr>`;
+              <td style="white-space:nowrap;"><button class="btn secondary small" data-action="edit-personnel" data-id="${p.id}">Modifier</button> <button class="btn danger small" data-action="del-personnel" data-id="${p.id}">Supprimer</button></td></tr>`;
           }).join('')}
         </tbody>
       </table>
@@ -7281,6 +7430,11 @@ function attachHandlers(){
         showToast('Membre supprimé'); render();
       });
     });
+    document.querySelectorAll('[data-action="edit-personnel"]').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        if(await ouvrirModaleEditionPersonnel(btn.dataset.id)){ showToast('Fiche modifiée'); render(); }
+      });
+    });
     document.querySelectorAll('[data-action="edit-salaire-fixe"]').forEach(input=>{
       input.addEventListener('change', async ()=>{
         const p = PERSONNEL.find(x=>x.id===input.dataset.id);
@@ -7290,7 +7444,12 @@ function attachHandlers(){
     document.querySelectorAll('[data-action="edit-matricule-personnel"]').forEach(input=>{
       input.addEventListener('change', async ()=>{
         const p = PERSONNEL.find(x=>x.id===input.dataset.id);
-        if(p){ p.matricule = input.value.trim(); await savePersonnel(); showToast('Matricule mis à jour'); }
+        if(p){
+          const nv = input.value.trim();
+          const doublon = nv && PERSONNEL.find(x=>x.id!==p.id && x.matricule && x.matricule.trim().toLowerCase()===nv.toLowerCase());
+          if(doublon){ alert(`Le matricule « ${nv} » est déjà attribué à ${doublon.nom} ${doublon.prenom}.`); input.value = p.matricule||''; return; }
+          p.matricule = nv; await savePersonnel(); showToast('Matricule mis à jour');
+        }
       });
     });
     document.querySelectorAll('[data-action="edit-nb-mois-paie"]').forEach(input=>{
