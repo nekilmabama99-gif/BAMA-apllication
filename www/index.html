@@ -272,6 +272,17 @@
   .table-emploi-print{font-size:9.5px;table-layout:fixed;}
   .table-emploi-print td, .table-emploi-print th{padding:5px 4px;text-align:center;overflow:hidden;word-break:break-word;}
   .table-emploi-print .col-creneau{text-align:left;}
+  /* Traits du tableau : le gris clair (#ccc, 1px) du .receipt-table disparaissait à l'impression
+     (réduction de zoom, imprimantes qui éclaircissent les traits fins). Traits foncés, 1px pleins,
+     fond d'en-tête conservé même sans option « arrière-plans ». */
+  .table-emploi-print{border-collapse:collapse;border:1.5px solid #222;}
+  .table-emploi-print td, .table-emploi-print th{border:1px solid #222 !important;}
+  .table-emploi-print thead th{background:#eceae3;font-weight:700;}
+  .table-emploi-print .col-creneau{background:#fafaf8;}
+  .table-emploi-print, .table-emploi-print *{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  .emploi-ens-page{page-break-after:always;break-after:page;}
+  .emploi-ens-page:last-child{page-break-after:auto;break-after:auto;}
+  .emploi-ens-resume{font-size:11px;margin:4px 0 8px 0;}
   .doc-pays{font-family:var(--serif);font-weight:700;font-size:12px;letter-spacing:.04em;color:var(--navy);}
   .doc-devise{font-size:9.5px;font-style:italic;color:var(--ink-soft);}
   .doc-ministere{font-size:9px;text-transform:uppercase;letter-spacing:.02em;color:var(--ink-soft);}
@@ -895,6 +906,8 @@ let classeAbsenceTab = null;
 let dateAbsenceSaisie = null;
 let trimestreClassementAssiduiteTab = null;
 let classeEmploiTab = null;
+let emploiMode = 'classe'; // 'classe' | 'enseignant'
+let enseignantEmploiTab = null;
 let matiereSaisieTab = null;
 let classeBulletinTab = null;
 let examenBlancActifTab = null;
@@ -921,7 +934,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7
 // Numéro de version du logiciel, affiché dans Paramètres pour faciliter le support (savoir
 // quelle version un établissement utilise). À incrémenter à chaque nouvelle build envoyée à un
 // client — garder aligné avec la "version" du package.json (Electron/Capacitor) par cohérence.
-const VERSION_LOGICIEL = '1.2.2';
+const VERSION_LOGICIEL = '1.2.3';
 
 const esc = s => (s===undefined||s===null) ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -5296,6 +5309,12 @@ function renderEmploiDuTemps(){
   const creneaux = PARAMS.creneauxHoraires;
   const enseignants = PERSONNEL.filter(p=>p.fonction==='Enseignant' && p.statut==='Actif');
 
+  const basculeMode = `<div class="tabs-sub" style="margin-bottom:8px;">
+    <button data-emploimode="classe" class="${emploiMode==='classe'?'active':''}">Par classe</button>
+    <button data-emploimode="enseignant" class="${emploiMode==='enseignant'?'active':''}">Par enseignant</button>
+  </div>`;
+  if(emploiMode==='enseignant') return basculeMode + renderEmploiEnseignant(enseignants);
+
   const caseVal = (jour, creneau) => EMPLOI.find(e=>e.classe===classeEmploiTab && e.jour===jour && e.creneau===creneau);
 
   const matiereOptions = (selectedId) => '<option value="">—</option><option value="DEVOIR" ' + (selectedId==='DEVOIR'?'selected':'') + '>📘 Devoirs</option>' + matieresPourClasse(classeEmploiTab).map(m=>
@@ -5318,7 +5337,7 @@ function renderEmploiDuTemps(){
     return `<tr><td class="col-creneau">${esc(creneau)}</td>${cells}</tr>`;
   }).join('');
 
-  return `
+  return basculeMode + `
   <div class="tabs-sub">
     ${classesNoms.map(c=>`<button data-classeemploitab="${esc(c)}" class="${classeEmploiTab===c?'active':''}">${esc(c)}</button>`).join('')}
   </div>
@@ -5337,6 +5356,75 @@ function renderEmploiDuTemps(){
     </div>
   </div>
   `;
+}
+
+/* ---------- Emploi du temps par enseignant ---------- */
+// Cases de l'enseignant : [{jour, creneau, classe, matiereNom}] — sans les créneaux « Devoirs ».
+function creneauxEnseignant(personnelId){
+  return EMPLOI.filter(e=>e.personnelId===personnelId && e.matiereId && e.matiereId!=='DEVOIR').map(e=>{
+    const m = matieresPourClasse(e.classe).find(x=>x.id===e.matiereId);
+    return { jour:e.jour, creneau:e.creneau, classe:e.classe, matiereNom: m ? m.nom : '?' };
+  });
+}
+
+function renderEmploiEnseignant(enseignants){
+  if(enseignants.length===0) return '<div class="panel"><p class="muted">Aucun enseignant actif. Ajoutez des enseignants dans l\'onglet « Personnel ».</p></div>';
+  if(!enseignants.some(p=>p.id===enseignantEmploiTab)) enseignantEmploiTab = enseignants[0].id;
+  const ens = enseignants.find(p=>p.id===enseignantEmploiTab);
+  const cases = creneauxEnseignant(ens.id);
+  const jours = PARAMS.joursSemaine, creneaux = PARAMS.creneauxHoraires;
+  const rows = creneaux.map(creneau=>{
+    if(/pause/i.test(creneau)) return `<tr class="ligne-pause"><td class="col-creneau">${esc(creneau)}</td><td colspan="${jours.length}" style="text-align:center;color:var(--ink-soft);font-style:italic;">— pause —</td></tr>`;
+    const tds = jours.map(j=>{
+      const l = cases.filter(c=>c.jour===j && c.creneau===creneau);
+      return `<td>${l.map(c=>`<strong>${esc(c.matiereNom)}</strong><br><span style="font-size:10px;">${esc(c.classe)}</span>`).join('<hr style="margin:3px 0;border:0;border-top:1px dashed #ccc;">')}</td>`;
+    }).join('');
+    return `<tr><td class="col-creneau">${esc(creneau)}</td>${tds}</tr>`;
+  }).join('');
+  const matieres = [...new Set(cases.map(c=>c.matiereNom))];
+  return `
+  <div class="panel">
+    <div class="panel-head">
+      <h3>Emploi du temps — ${esc(ens.nom)} ${esc(ens.prenom)}</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <select id="select-enseignant-emploi-vue">${enseignants.map(p=>`<option value="${p.id}" ${p.id===ens.id?'selected':''}>${esc(p.nom)} ${esc(p.prenom)}</option>`).join('')}</select>
+        <button class="btn secondary small" data-action="print-emploi-ens">Imprimer</button>
+        <button class="btn secondary small" data-action="print-emploi-ens-tous">Imprimer tous les enseignants</button>
+      </div>
+    </div>
+    <p class="desc" style="margin:-6px 0 12px 0;">${cases.length} créneau(x) par semaine${matieres.length?` — matière(s) : ${esc(matieres.join(', '))}`:''}. Cet emploi du temps est généré automatiquement à partir des emplois du temps des classes.</p>
+    <div class="table-wrap"><table class="table-emploi">
+      <thead><tr><th class="col-creneau">Horaire</th>${jours.map(j=>`<th>${esc(j)}</th>`).join('')}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+  </div>`;
+}
+
+function buildEmploiEnseignantHTML(personnelId){
+  const ens = PERSONNEL.find(p=>p.id===personnelId);
+  if(!ens) return '';
+  const cases = creneauxEnseignant(personnelId);
+  const jours = PARAMS.joursSemaine, creneaux = PARAMS.creneauxHoraires;
+  const rows = creneaux.map(creneau=>{
+    if(/pause/i.test(creneau)) return `<tr><td class="col-creneau">${esc(creneau)}</td><td colspan="${jours.length}" style="text-align:center;font-style:italic;">— pause —</td></tr>`;
+    const tds = jours.map(j=>{
+      const l = cases.filter(c=>c.jour===j && c.creneau===creneau);
+      return `<td>${l.map(c=>`<strong>${esc(c.matiereNom)}</strong><br><span style="font-size:9px;">${esc(c.classe)}</span>`).join('<br>')}</td>`;
+    }).join('');
+    return `<tr><td class="col-creneau">${esc(creneau)}</td>${tds}</tr>`;
+  }).join('');
+  const matieres = [...new Set(cases.map(c=>c.matiereNom))];
+  return `
+    <div class="bulletin emploi-temps-print emploi-ens-page">
+      ${printHeader()}
+      <h3>Emploi du temps — ${esc(ens.nom)} ${esc(ens.prenom)}</h3>
+      <div class="emploi-ens-resume">${matieres.length?`Matière(s) : <strong>${esc(matieres.join(', '))}</strong> — `:''}${cases.length} créneau(x) par semaine</div>
+      <table class="receipt-table table-emploi-print">
+        <colgroup><col style="width:12%;">${jours.map(()=>`<col style="width:${(88/jours.length).toFixed(2)}%;">`).join('')}</colgroup>
+        <thead><tr><th class="col-creneau">Horaire</th>${jours.map(j=>`<th>${esc(j)}</th>`).join('')}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
 }
 
 function buildEmploiDuTempsHTML(classe){
@@ -7708,6 +7796,18 @@ function attachHandlers(){
   }
 
   if(currentTab==='emploi'){
+    document.querySelectorAll('[data-emploimode]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ emploiMode = btn.dataset.emploimode; render(); });
+    });
+    document.getElementById('select-enseignant-emploi-vue')?.addEventListener('change', (e)=>{ enseignantEmploiTab = e.target.value; render(); });
+    document.querySelector('[data-action="print-emploi-ens"]')?.addEventListener('click', ()=>{
+      openPrint(buildEmploiEnseignantHTML(enseignantEmploiTab));
+    });
+    document.querySelector('[data-action="print-emploi-ens-tous"]')?.addEventListener('click', ()=>{
+      const ids = PERSONNEL.filter(p=>p.fonction==='Enseignant' && p.statut==='Actif' && creneauxEnseignant(p.id).length>0).map(p=>p.id);
+      if(ids.length===0){ showToast('Aucun enseignant n\'a de créneau dans l\'emploi du temps'); return; }
+      openPrint(ids.map(buildEmploiEnseignantHTML).join(''));
+    });
     document.querySelectorAll('[data-classeemploitab]').forEach(btn=>{
       btn.addEventListener('click', ()=>{ classeEmploiTab = btn.dataset.classeemploitab; render(); });
     });
