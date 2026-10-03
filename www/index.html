@@ -934,7 +934,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7
 // Numéro de version du logiciel, affiché dans Paramètres pour faciliter le support (savoir
 // quelle version un établissement utilise). À incrémenter à chaque nouvelle build envoyée à un
 // client — garder aligné avec la "version" du package.json (Electron/Capacitor) par cohérence.
-const VERSION_LOGICIEL = '1.2.3';
+const VERSION_LOGICIEL = '1.2.4';
 
 const esc = s => (s===undefined||s===null) ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -1255,6 +1255,7 @@ async function loadAll(){
     if(savedParams.paie.prixHeureVacationLycee===undefined) PARAMS.paie.prixHeureVacationLycee = savedParams.paie.prixHeureVacation;
     if(savedParams.paie.prixHeureVacationCollege===undefined) PARAMS.paie.prixHeureVacationCollege = savedParams.paie.prixHeureVacation;
   }
+  await nettoyerEmploiOrphelin();
   const savedName = storageGet('school-name');
   if(savedName) document.getElementById('school-name').value = savedName;
   LOGO_DATA_URL = PHOTOS_CACHE['logo'] || storageGet('logo-data') || '';
@@ -3893,7 +3894,7 @@ function ouvrirModaleEditionPersonnel(personnelId){
         const estEns = fonction==='Enseignant', estPerm = estEns && v('typePersonnel')==='Permanent';
         // Passage Enseignant -> autre fonction : prévenir des liens qui n'auront plus de sens.
         if(m.fonction==='Enseignant' && !estEns){
-          const nbCreneaux = EMPLOI.filter(ev=>ev.personnelId===m.id).length;
+          const nbCreneaux = EMPLOI.filter(ev=>ev.personnelId===m.id && creneauEmploiValide(ev)).length;
           const compte = UTILISATEURS.find(u=>u.typeCompte==='enseignant' && u.personnelId===m.id);
           if(nbCreneaux>0 || compte){
             const d = [nbCreneaux>0 ? `${nbCreneaux} créneau(x) d'emploi du temps` : null, compte ? 'un compte enseignant lié' : null].filter(Boolean).join(' et ');
@@ -5313,14 +5314,25 @@ function renderEmploiDuTemps(){
     <button data-emploimode="classe" class="${emploiMode==='classe'?'active':''}">Par classe</button>
     <button data-emploimode="enseignant" class="${emploiMode==='enseignant'?'active':''}">Par enseignant</button>
   </div>`;
-  if(emploiMode==='enseignant') return basculeMode + renderEmploiEnseignant(enseignants);
+  if(emploiMode==='enseignant'){
+    // Enseignants actifs + ceux, devenus inactifs, qui ont encore des créneaux (consultables/imprimables).
+    const pourVue = PERSONNEL.filter(p=>p.fonction==='Enseignant' && (p.statut==='Actif' || creneauxEnseignant(p.id).length>0));
+    return basculeMode + renderEmploiEnseignant(pourVue);
+  }
 
   const caseVal = (jour, creneau) => EMPLOI.find(e=>e.classe===classeEmploiTab && e.jour===jour && e.creneau===creneau);
 
   const matiereOptions = (selectedId) => '<option value="">—</option><option value="DEVOIR" ' + (selectedId==='DEVOIR'?'selected':'') + '>📘 Devoirs</option>' + matieresPourClasse(classeEmploiTab).map(m=>
     `<option value="${m.id}" ${selectedId===m.id?'selected':''}>${esc(m.nom)}</option>`).join('');
+  // Un enseignant déjà affecté mais passé « Inactif » doit rester dans la liste de SA case : sinon la
+  // liste ne l'offrait plus, la case affichait « — », et modifier seulement la matière effaçait
+  // l'enseignant en silence (la lecture de la case renvoyait alors une valeur vide).
   const enseignantOptions = (selectedId) => '<option value="">—</option>' + enseignants.map(p=>
-    `<option value="${p.id}" ${selectedId===p.id?'selected':''}>${esc(p.nom)} ${esc(p.prenom)}</option>`).join('');
+    `<option value="${p.id}" ${selectedId===p.id?'selected':''}>${esc(p.nom)} ${esc(p.prenom)}</option>`).join('') +
+    ((selectedId && !enseignants.some(p=>p.id===selectedId)) ? (()=>{
+      const q = PERSONNEL.find(x=>x.id===selectedId);
+      return q ? `<option value="${q.id}" selected>${esc(q.nom)} ${esc(q.prenom)} (${esc((q.statut||'inactif').toLowerCase())})</option>` : '';
+    })() : '');
 
   const rows = creneaux.map(creneau=>{
     if(/pause/i.test(creneau)){
@@ -5359,10 +5371,34 @@ function renderEmploiDuTemps(){
 }
 
 /* ---------- Emploi du temps par enseignant ---------- */
+// Un créneau d'emploi du temps est « valide » tant que sa classe existe encore et que sa matière
+// (hors « Devoirs ») existe encore dans cette classe. Supprimer une classe ou une matière dans
+// Paramètres laissait auparavant ses créneaux en base : invisibles dans la grille, mais encore
+// comptés — faux conflits « déjà affecté à la classe X » (classe disparue), créneaux fantômes dans
+// les avertissements de suppression du personnel. Lecture directe de PARAMS (sans
+// matieresPourClasse) pour ne pas recréer une entrée vide pour une classe supprimée.
+function creneauEmploiValide(ev){
+  if(!PARAMS.classes.some(c=>c.nom===ev.classe)) return false;
+  if(!ev.matiereId || ev.matiereId==='DEVOIR') return true;
+  const liste = (PARAMS.matieresParClasse||{})[ev.classe];
+  return Array.isArray(liste) && liste.some(m=>m.id===ev.matiereId);
+}
+// Retire les créneaux devenus orphelins (classe ou matière supprimée). Garde-fou : ne fait rien si
+// aucune classe n'est configurée (paramètres vides/illisibles), pour ne jamais vider l'emploi du
+// temps par erreur. Retourne le nombre de créneaux retirés.
+async function nettoyerEmploiOrphelin(){
+  if(!Array.isArray(EMPLOI) || EMPLOI.length===0 || PARAMS.classes.length===0) return 0;
+  const avant = EMPLOI.length;
+  EMPLOI = EMPLOI.filter(creneauEmploiValide);
+  const n = avant - EMPLOI.length;
+  if(n>0) await saveEmploi();
+  return n;
+}
+
 // Cases de l'enseignant : [{jour, creneau, classe, matiereNom}] — sans les créneaux « Devoirs ».
 function creneauxEnseignant(personnelId){
-  return EMPLOI.filter(e=>e.personnelId===personnelId && e.matiereId && e.matiereId!=='DEVOIR').map(e=>{
-    const m = matieresPourClasse(e.classe).find(x=>x.id===e.matiereId);
+  return EMPLOI.filter(e=>e.personnelId===personnelId && e.matiereId && e.matiereId!=='DEVOIR' && creneauEmploiValide(e)).map(e=>{
+    const m = (PARAMS.matieresParClasse[e.classe]||[]).find(x=>x.id===e.matiereId);
     return { jour:e.jour, creneau:e.creneau, classe:e.classe, matiereNom: m ? m.nom : '?' };
   });
 }
@@ -7490,7 +7526,7 @@ function attachHandlers(){
       btn.addEventListener('click', async ()=>{
         const membre = PERSONNEL.find(x=>x.id===btn.dataset.id);
         if(membre){
-          const nbCreneaux = EMPLOI.filter(ev=>ev.personnelId===membre.id).length;
+          const nbCreneaux = EMPLOI.filter(ev=>ev.personnelId===membre.id && creneauEmploiValide(ev)).length;
           const classesProfPrincipal = Object.keys(PROF_PRINCIPAL).filter(cl=>PROF_PRINCIPAL[cl]===`${membre.nom} ${membre.prenom}`);
           // Un historique de paie (PAIE) est une pièce comptable — les mois déjà réglés doivent
           // rester traçables même après le départ du personnel — donc on ne le purge JAMAIS
@@ -7804,7 +7840,7 @@ function attachHandlers(){
       openPrint(buildEmploiEnseignantHTML(enseignantEmploiTab));
     });
     document.querySelector('[data-action="print-emploi-ens-tous"]')?.addEventListener('click', ()=>{
-      const ids = PERSONNEL.filter(p=>p.fonction==='Enseignant' && p.statut==='Actif' && creneauxEnseignant(p.id).length>0).map(p=>p.id);
+      const ids = PERSONNEL.filter(p=>p.fonction==='Enseignant' && creneauxEnseignant(p.id).length>0).map(p=>p.id);
       if(ids.length===0){ showToast('Aucun enseignant n\'a de créneau dans l\'emploi du temps'); return; }
       openPrint(ids.map(buildEmploiEnseignantHTML).join(''));
     });
@@ -7823,7 +7859,7 @@ function attachHandlers(){
       // même jour/créneau ? On avertit sans bloquer (co-intervention, classes jumelées... des cas
       // légitimes existent), mais on laisse la personne décider en connaissance de cause.
       if(personnelId){
-        const conflit = EMPLOI.find(ev=>ev.personnelId===personnelId && ev.jour===jour && ev.creneau===creneau && ev.classe!==classeEmploiTab);
+        const conflit = EMPLOI.find(ev=>ev.personnelId===personnelId && ev.jour===jour && ev.creneau===creneau && ev.classe!==classeEmploiTab && creneauEmploiValide(ev));
         if(conflit){
           const enseignant = PERSONNEL.find(p=>p.id===personnelId);
           const nomEns = enseignant ? `${enseignant.nom} ${enseignant.prenom}` : 'Cet enseignant';
@@ -8514,6 +8550,7 @@ function attachHandlers(){
         if(!(await confirmerAvecCode('Supprimer cette matière ?'))) return;
         PARAMS.matieresParClasse[classe] = matieresPourClasse(classe).filter(x=>x.id!==matiereId);
         await saveParams();
+        await nettoyerEmploiOrphelin();
         await purgerAffectationsObsoletes();
         showToast('Matière supprimée'); render();
       });
@@ -8581,6 +8618,7 @@ function attachHandlers(){
         if(classeSupprimee && PARAMS.matieresParClasse) delete PARAMS.matieresParClasse[classeSupprimee];
         if(classeSupprimee && PROF_PRINCIPAL[classeSupprimee]!==undefined) delete PROF_PRINCIPAL[classeSupprimee];
         await Promise.all([saveParams(), saveProfPrincipal()]);
+        await nettoyerEmploiOrphelin();
         await purgerAffectationsObsoletes();
         showToast('Classe supprimée'); render();
       });
